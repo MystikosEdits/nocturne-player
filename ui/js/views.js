@@ -489,13 +489,16 @@ export function pasteSignIn() {
 
 // ------------------------------------------------------------------ Spotify import
 // Two ways in, one matcher/review/import: (a) a pasted link to ANY public playlist/album/song (no Spotify
-// sign-in; read from Spotify's public embed, first 100 songs), (b) your own Spotify library (Connect).
+// sign-in; the public embed gives the first 100 songs, bigger playlists are then read in full from the normal page
+// by an off-screen browser window = tempo/spotify_full.py), (b) your own Spotify library (Connect).
 const SP_KIND = { playlist: 'Playlist', album: 'Album', track: 'Song' };
 const selAll = () => (isMac() ? '⌘A then ⌘C' : 'Ctrl+A then Ctrl+C');
 
-function moreThan100(total, count) {
+// the full read didn't get them all (or can't run here): the song-links trick still brings the rest
+function moreThan100(total, count, reason) {
+  const why = reason ? `Nocturne could only read ${count} of the ${total} songs (${reason}).` : `Spotify only shows the first ${count} of ${total} songs without signing in.`;
   return h('div', { class: 'note sp-note' },
-    `Spotify only shows the first ${count} of ${total} songs without signing in. To bring all ${total}: open it in the Spotify app, click any song, press ${selAll()}, and paste here — Nocturne reads the song links.`);
+    `${why} To bring all ${total}: open it in the Spotify app, click any song, press ${selAll()}, and paste here — Nocturne reads the song links.`);
 }
 
 // what a pasted link points at; `actions` = buttons under it
@@ -511,7 +514,9 @@ export function spotifyPreview(p, actions = []) {
   const wrap = h('div', null, h('div', { class: 'sp-preview' }, p.image ? img(p.image, 'md') : h('div', { class: 'art md liked-art', html: I.music }),
     h('div', { class: 'tt' }, h('div', { class: 'sp-pname' }, p.name), h('div', { class: 'tsub' }, sub)),
     actions.length ? h('div', { class: 'sp-pact' }, ...actions) : null));
-  if (p.total > p.count) wrap.append(moreThan100(p.total, p.count));
+  if (p.total > p.count && p.full) {
+    wrap.append(h('div', { class: 'muted small sp-gap sp-full' }, `All ${p.total} songs get read when you start — takes a few seconds.`));
+  } else if (p.total > p.count) wrap.append(moreThan100(p.total, p.count));
   if (p.kind === 'track') {
     const m = p.match || {};
     const opts = [m.track || m.best, ...(m.alts || [])].filter(Boolean);
@@ -687,7 +692,7 @@ async function reviewStep(rerender) {
       nameInputs.set(l.id, inp);
       b.append(h('div', { class: 'row-inline sp-name' }, h('span', { class: 'muted small' }, 'New playlist'), inp));
     }
-    if (l.total > l.items.length) b.append(moreThan100(l.total, l.items.length));
+    if (l.total > l.items.length) b.append(moreThan100(l.total, l.items.length, l.short_reason));
     const det = h('details', { class: 'review' }, h('summary', null, h('b', null, l.name), h('span', { class: 'muted' }, ` — ${l.items.length - unsure.length} found, ${unsure.length} to check`)));
     for (const { it, i } of unsure.slice(0, 200)) {
       const m = it.match || {};

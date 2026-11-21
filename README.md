@@ -42,9 +42,10 @@ about 65 MB with the window closed, and the music keeps going when you close the
 - **Sign in** (Settings → Sign in with Google) to get your own library, likes, history and recommendations.
   With YouTube Music Premium, songs stream at 256 kbps; without signing in it still plays at about 130 kbps.
   If Google blocks the sign-in window, use the "paste your sign-in" link under the button.
-- **Spotify import** (optional): paste a Spotify link into the search box — that needs nothing else. Spotify only shows
-  the first 100 songs of a playlist that way; for all of them, open it in the Spotify app, click a song, press Ctrl+A then
-  Ctrl+C, and paste. To bring over your own liked songs / private playlists you need your own free Spotify app key:
+- **Spotify import** (optional): paste a Spotify link into the search box — that needs nothing else. Big playlists come
+  over whole: Nocturne reads every song from Spotify's public page in a browser window you never see (500 songs take
+  about 15 seconds). If that ever fails it still gets the first 100; then open the playlist in the Spotify app, click a
+  song, press Ctrl+A then Ctrl+C, and paste, and Nocturne reads each song link. To bring over your own liked songs / private playlists you need your own free Spotify app key:
   developer.spotify.com/dashboard → Create app → Redirect URI `http://127.0.0.1:8737/spotify/callback`, tick
   **Web API** → copy the **Client ID** into Nocturne.
 

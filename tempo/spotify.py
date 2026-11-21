@@ -10,8 +10,12 @@ import difflib
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
+import subprocess
+import sys
+import threading
 import time
 import unicodedata
 import urllib.parse
@@ -187,7 +191,8 @@ class Spotify:
         sources = []
         for kind, sid in links:
             if kind in ("playlist", "album"):
-                sources.append((f"sp:{kind}:{sid}", (lambda kind=kind, sid=sid: self.read_link(kind, sid)), f"the {kind}"))
+                sources.append((f"sp:{kind}:{sid}", (lambda kind=kind, sid=sid: self.read_link(kind, sid, full=True)),
+                                f"the {kind}"))
         songs = [sid for kind, sid in links if kind == "track"]
         if len(songs) == 1:
             sources.append((f"sp:track:{songs[0]}", (lambda: self.read_link("track", songs[0])), "the song"))
@@ -195,11 +200,29 @@ class Spotify:
             sources.append((f"sp:tracks:{songs[0]}:{len(songs)}", (lambda: read_tracks(songs, self.job)), f"{len(songs)} songs"))
         self._start(sources, "Reading the Spotify link…")
 
-    def read_link(self, kind: str, sid: str) -> dict:
+    def read_link(self, kind: str, sid: str, full: bool = False) -> dict:
+        """Preview (full=False): the quick embed read. Import (full=True): a playlist the embed cut off at 100
+        is read again, all of it, from the normal page (spotify_full: a headless browser, no window)."""
         hit = self._links.get((kind, sid))
-        if hit and time.time() - hit[0] < 600:
+        fresh = hit is not None and time.time() - hit[0] < 600
+        if fresh and (not full or not hit[1].get("more") or hit[1].get("full_tried")):
             return hit[1]
-        d = read_public(kind, sid)
+        d = hit[1] if fresh else read_public(kind, sid)
+        if full and d.get("more"):
+            d = dict(d)
+            d["full_tried"] = True
+            res = read_full(kind, sid, d.get("total") or 0, self.job)
+            if res.get("rows") and len(res["rows"]) > len(d["rows"]):
+                d.update(rows=res["rows"], total=max(len(res["rows"]), res.get("total") or 0), more=False,
+                         full=True, full_seconds=res.get("seconds"))
+                if not res.get("complete"):
+                    d["more"] = True
+                    d["short_reason"] = res.get("error") or ("reading took too long" if res.get("timed_out")
+                                                             else "Spotify stopped giving songs before the end")
+            else:
+                d["short_reason"] = res.get("error") or "couldn't read more than the first 100"
+                d["full_tried"] = False   # a failed full read isn't cached: pressing it again tries again
+                log.info("full read of %s failed: %s", sid, d["short_reason"])
         self._links[(kind, sid)] = (time.time(), d)
         return d
 
@@ -215,6 +238,7 @@ class Spotify:
         d = self.read_link(kind, sid)
         out = {k: d.get(k) for k in ("kind", "id", "name", "owner", "image", "total", "url")}
         out["count"] = len(d["rows"])
+        out["full"] = bool(d.get("more")) and full_read_available()   # all of it gets read when the import starts
         if kind == "track" and d["rows"]:
             out["src"] = d["rows"][0]
             out["match"] = self.match_one(d["rows"][0])
@@ -233,7 +257,7 @@ class Spotify:
                 self.job["message"] = f"Reading {label}…"
                 d = reader()
                 lists.append({"id": lid, "name": d.get("name") or label, "rows": d["rows"],
-                              "total": d.get("total"), "url": d.get("url")})
+                              "total": d.get("total"), "url": d.get("url"), "short_reason": d.get("short_reason")})
             uniq = {}
             for l in lists:
                 for r in l["rows"]:
@@ -264,7 +288,7 @@ class Spotify:
                     key = r["sid"] or (r["name"] + "|" + ",".join(r["artists"]))
                     items.append({"src": r, "match": cache.get(key)})
                 out_lists.append({"id": l["id"], "name": l["name"], "items": items, "total": l.get("total"),
-                                  "url": l.get("url")})
+                                  "url": l.get("url"), "short_reason": l.get("short_reason")})
             counts = {"good": 0, "unsure": 0, "missing": 0}
             for l in out_lists:
                 for it in l["items"]:
@@ -463,16 +487,90 @@ def read_public(kind: str, sid: str) -> dict:
                      "name": t.get("title") or "", "artists": _artists(t.get("subtitle")),
                      "album": ent.get("name") if kind == "album" else "", "ms": t.get("duration") or 0})
     total = len(rows)
-    if kind == "playlist" and len(ent.get("trackList") or []) >= 100:
-        try:  # the embed stops at 100: the public page says how many there really are
+    more = False
+    if len(ent.get("trackList") or []) >= 100:   # playlists AND albums: the embed stops at 100
+        more = True    # maybe more (if the page doesn't say, the full read finds out)
+        try:  # the public page says how many there really are
             page = _fetch(url, ua="Mozilla/5.0", timeout=15)
-            m = re.search(r'<meta name="music:song_count" content="(\d+)"', page)
+            m = (re.search(r'<meta name="music:song_count" content="(\d+)"', page)
+                 or re.search(r'<meta (?:name|property)="(?:og:)?description" content="[^"]*?(\d[\d,]*) songs', page))
             if m:
+                m = re.match(r"(\d+)", m.group(1).replace(",", ""))
                 total = max(total, int(m.group(1)))
+                more = total > len(rows)
         except Exception as e:
             log.info("song count for %s: %s", sid, e)
     return {"kind": kind, "id": sid, "name": ent.get("name") or ent.get("title") or "Spotify " + kind,
-            "owner": ent.get("subtitle") or "", "image": image, "rows": rows, "total": total, "url": url}
+            "owner": ent.get("subtitle") or "", "image": image, "rows": rows, "total": total, "url": url, "more": more}
+
+
+# ---------------- the WHOLE playlist (Nov 21): the embed stops at 100, the normal page doesn't
+# open.spotify.com/playlist/<id> (or /album/<id>) opened in a real browser engine, signed out, and scrolled,
+# lazy-loads every row. tempo/spotify_full.py is that browser, in its own short-lived process: a headless
+# Edge/Chrome/Brave (no window at all; Edge is on every Windows). No such browser = the first 100 + the Ctrl+A
+# song-links route. Measured Nov 21: Windows 500 songs 13-15 s, 152 in 7 s, a 150-song album 7 s; Mac (Brave) 9 / 5 / 4 s.
+_full_lock = threading.Lock()   # one at a time (they share one browser profile)
+
+
+def full_read_available() -> bool:
+    if os.environ.get("TEMPO_NO_FULL_READ") == "1":     # tests: force the embed-only path
+        return False
+    try:
+        from .spotify_full import find_browser
+        return find_browser() is not None     # headless Edge / Chrome / Brave: no window at all
+    except Exception:
+        return False
+
+
+def read_full(kind: str, sid: str, total: int = 0, job: dict | None = None, timeout: float | None = None) -> dict:
+    """{rows, total, complete, seconds} or {error}. Progress goes into job (done/total/message)."""
+    if not full_read_available():
+        return {"error": "no browser engine here"}
+    # the first start of WebView2 on a busy laptop can take 1-2 minutes; after that ~6 s
+    timeout = timeout or min(300.0, 150.0 + total * 0.2)
+    cmd = [sys.executable, "-m", "tempo.spotify_full", kind, sid, str(int(total or 0)), str(int(timeout))]
+    kw = {}
+    if config.IS_WIN:
+        kw["creationflags"] = 0x08000000   # CREATE_NO_WINDOW: no console window, ever
+
+    def msg_for(tot):
+        return f"Reading all {tot} songs from Spotify…" if tot else "Reading every song from Spotify…"
+    t0 = time.time()
+    with _full_lock:
+        if job is not None:
+            job.update(total=total or 0, done=0, message=msg_for(total))
+        try:
+            proc = subprocess.Popen(cmd, cwd=str(config.ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, **kw)
+        except Exception as e:   # noqa: BLE001
+            return {"error": f"couldn't start the reader: {e}"[:200]}
+        killer = threading.Timer(timeout + 30, proc.kill)   # its own watchdog should end it first
+        killer.daemon = True
+        killer.start()
+        out: dict = {"error": "the reader stopped without an answer"}
+        try:
+            for line in proc.stdout:
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if "progress" in msg and job is not None:
+                    n, tot = msg.get("progress") or 0, msg.get("total") or total
+                    job.update(done=min(n, tot or n), total=tot or 0, message=msg_for(tot))
+                elif "result" in msg:
+                    out = msg["result"]
+                elif "error" in msg:
+                    out = {"error": msg["error"]}
+            proc.wait(timeout=20)
+        except Exception as e:   # noqa: BLE001
+            out = {"error": str(e)[:200]}
+        finally:
+            killer.cancel()
+            if proc.poll() is None:
+                proc.kill()
+    log.info("full read %s: %s rows of %s in %.1fs%s", sid, len(out.get("rows") or []), out.get("total"),
+             time.time() - t0, (" (" + out["error"] + ")") if out.get("error") else "")
+    return out
 
 
 def read_tracks(ids: list[str], job: dict | None = None) -> dict:
