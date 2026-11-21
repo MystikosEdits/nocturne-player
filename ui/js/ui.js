@@ -155,7 +155,7 @@ export function menu(x, y, items) {
   closeMenu();
   const el = buildMenu(items);
   document.body.append(el);
-  place(el, x, y);
+  place(el, x, y, x);   // no room on the right: open to the LEFT of the cursor, like a normal menu (was: pinned to the window edge)
   openMenu = el;
   return el;
 }
@@ -414,7 +414,9 @@ export function trackList(tracks, opts = {}) {
     const update = () => {
       const sc = scroller();
       if (!sc || !body.isConnected) return;
-      const top = body.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+      // getBoundingClientRect is in screen pixels; rows and clientHeight are in CSS pixels. Under Settings -> Size the
+      // two differ (x0.9 at 90%), and deep in a long playlist the rows were drawn far from the screen: all blank.
+      const top = (body.getBoundingClientRect().top - sc.getBoundingClientRect().top) / pageZoom();
       const first = Math.max(0, Math.floor(-top / RH) - 10);
       const last = Math.min(tracks.length - 1, Math.ceil((-top + sc.clientHeight) / RH) + 10);
       for (const [i, el] of rendered) if (i < first || i > last) { el.remove(); rendered.delete(i); }

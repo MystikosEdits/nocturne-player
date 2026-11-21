@@ -32,6 +32,7 @@ class JsApi:
         self._window = None  # private: pywebview walks every PUBLIC attribute of this object on each page load (a window reference = the whole WinForms tree = "Not responding")
         self._signin = None
         self._pre_mini = None   # the window's frame / minimum size before the mini player (private, same reason)
+        self._keeper = None     # winscale.DpiKeeper (Windows), private for the same reason
 
     def mini(self, on, w=440, h=136, dpr=1):
         """Mini player: shrink the window to a small always-on-top player, or put it back exactly where it was.
@@ -47,12 +48,23 @@ class JsApi:
                 form = win.native
 
                 def go():
+                    if self._keeper:
+                        self._keeper.hold()      # this size change is ours, not a move to another monitor
                     if on:
                         if self._pre_mini is None:
                             self._pre_mini = (form.Bounds, form.MinimumSize, form.WindowState)
                         form.WindowState = FormWindowState.Normal
                         form.MinimumSize = Size(int(300 * dpr), int(90 * dpr))
-                        form.ClientSize = Size(int(w * dpr), int(h * dpr))
+                        cw, ch = int(round(w * dpr)), int(round(h * dpr))
+                        form.ClientSize = Size(cw, ch)
+                        # WinForms sizes the title bar for 96 DPI: on a 125% monitor the client came out 8 px short
+                        # (and its ClientSize getter repeats the mistake): measure the real client area with Win32
+                        import ctypes
+                        from ctypes import wintypes
+                        rc = wintypes.RECT()
+                        ctypes.windll.user32.GetClientRect(ctypes.c_void_p(form.Handle.ToInt64()), ctypes.byref(rc))
+                        if rc.right != cw or rc.bottom != ch:
+                            form.Size = Size(form.Size.Width + cw - rc.right, form.Size.Height + ch - rc.bottom)
                         form.TopMost = True
                     else:
                         form.TopMost = False
@@ -244,43 +256,95 @@ def main():
             pass
 
     js = JsApi()
-    w = int(geo.get("w") or 1280)
-    h = int(geo.get("h") or 820)
-    x = geo.get("x")
-    y = geo.get("y")
     screen = None
-    try:
-        screens = list(webview.screens)
-    except Exception:
-        screens = []
-    # Tempo always opens on the MAIN monitor (Grant, Nov 20: "it should open on main monitor").
-    # Keep the last position only if it was on the main monitor; otherwise centre it there.
-    main = next((s for s in screens if (s.x, s.y) == (0, 0)), screens[0] if screens else None)
-    on_main = main is not None and x is not None and y is not None and \
-        main.x <= x + 60 < main.x + main.width and main.y <= y + 16 < main.y + main.height
-    if not on_main:
-        x = y = None
-        screen = main
-        if screen:
-            w = min(w, screen.width - 80)
-            h = min(h, screen.height - 80)
+    min_size = (960, 640)
+    plan = None
+    if config.IS_WIN:
+        # Sharp on every monitor (was: blurry, bitmap-stretched on the 125% laptop panel) - see tempo/winscale.py
+        from . import winscale
+        winscale.enable_per_monitor()
+        try:
+            plan = winscale.plan(geo, winscale.monitors())
+        except Exception:       # noqa: BLE001
+            plan = None
+    if plan:
+        # Opens on the MAIN monitor (Grant, Nov 20: "it should open on main monitor"), fully inside it, never bigger.
+        # pywebview multiplies x/y/w/h by the scale of the monitor the window is created on (the main one).
+        s_ = plan["scale"]
+        w, h, x, y = plan["w_log"], plan["h_log"], plan["x"] / s_, plan["y"] / s_
+        min_size = plan["min"]
+    else:
+        w = int(geo.get("w") or 1280)
+        h = int(geo.get("h") or 820)
+        x = geo.get("x")
+        y = geo.get("y")
+        try:
+            screens = list(webview.screens)
+        except Exception:
+            screens = []
+        # Keep the last position only if it was on the main monitor; otherwise centre it there. Never bigger than it.
+        main = next((s for s in screens if (s.x, s.y) == (0, 0)), screens[0] if screens else None)
+        on_main = main is not None and x is not None and y is not None and \
+            main.x <= x + 60 < main.x + main.width and main.y <= y + 16 < main.y + main.height
+        if main:
+            w = min(w, main.width - 40)
+            h = min(h, main.height - 60)
+            min_size = (min(960, w), min(640, h))
+        if not on_main:
+            x = y = None
+            screen = main
     os_name = "mac" if config.IS_MAC else "win"
+    # --quiet (used when an update reopens the window): start minimised and never take focus, so it can't pull Grant
+    # out of a game (Nov 21: "its really fucking annoying that im trying to play a game and you are opening random
+    # terminals and it tabs me out")
+    import sys as _sys
+    quiet = "--quiet" in _sys.argv
     win = webview.create_window(config.NAME, f"{URL}?shell=1&os={os_name}", js_api=js, width=w, height=h, x=x, y=y,
-                                screen=screen, min_size=(960, 640), background_color=BG, text_select=False)
+                                screen=screen, min_size=min_size, background_color=BG, text_select=False,
+                                minimized=quiet, focus=not quiet)
     js._window = win
-    state = {"closing": False}
+    state = {"closing": False, "hwnd": None}
 
     def remember_geometry():
         try:
-            if js._pre_mini is None and win.width and win.height and win.width > 500:   # never remember the mini size
-                s = config.Settings()
-                s.update({"window": {"x": win.x, "y": win.y, "w": win.width, "h": win.height}})
+            if js._pre_mini is not None:     # never remember the mini player's size
+                return
+            if config.IS_WIN and state["hwnd"]:
+                from . import winscale
+                g = winscale.geometry_to_save(state["hwnd"])
+            elif win.width and win.height and win.width > 500:
+                g = {"x": win.x, "y": win.y, "w": win.width, "h": win.height}
+            else:
+                g = None
+            if g:
+                config.Settings().update({"window": g})
         except Exception:
             pass
+
+    def keep_scale():
+        # per-monitor DPI: fix the opening rect if Windows put the window on another monitor first, then keep its
+        # logical size when it's dragged between monitors with different scaling (WinForms doesn't)
+        from . import winscale
+        form = win.native
+        hwnd = form.Handle.ToInt64()
+        state["hwnd"] = hwnd
+        if plan and not winscale.u.IsIconic(winscale.W.HWND(hwnd)):     # --quiet starts minimised: leave it alone
+            l, t, r, b = winscale.window_rect(hwnd)
+            if abs(l - plan["x"]) > 4 or abs(t - plan["y"]) > 4 or abs(r - l - plan["w"]) > 4 or abs(b - t - plan["h"]) > 4:
+                import ctypes
+                ctypes.windll.user32.SetWindowPos(ctypes.c_void_p(hwnd), None, plan["x"], plan["y"], plan["w"], plan["h"], 0x0014)
+        keeper = winscale.DpiKeeper(form, hwnd, mini_min=lambda: (300, 90) if js._pre_mini is not None else None)
+        js._keeper = keeper
+        form.Move += keeper.check
+        form.Resize += keeper.check
 
     def on_shown():
         if config.IS_WIN:
             _style_windows(win)
+            try:
+                keep_scale()
+            except Exception:
+                pass
         elif config.IS_MAC:
             _style_mac(win)
 

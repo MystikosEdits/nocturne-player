@@ -35,11 +35,11 @@ export function buildBar() {
   els.like = h('button', { class: 'ibtn like', title: 'Like (L)', onclick: () => store.state?.track && toggleLike(store.state.track) }, icon('heart'));
   const left = h('div', { class: 'bar-left' }, els.art, h('div', { class: 'bar-text' }, els.title, h('div', { class: 'bar-sub' }, els.fxChip, els.artist)), els.like);
 
-  els.shuffle = btn('shuffle', 'Shuffle (S)', () => cmd('shuffle', !store.state?.shuffle));
+  els.shuffle = btn('shuffle', 'Shuffle (S)', () => cmd('shuffle', !store.state?.shuffle), 'shuffle-btn');
   els.prev = btn('prev', 'Previous', () => cmd('prev'), 'tr');
   els.play = h('button', { class: 'playbtn', title: 'Play (Space)', onclick: () => cmd('toggle') }, icon('play'));
   els.next = btn('next', 'Next', () => cmd('next'), 'tr');
-  els.repeat = btn('repeat', 'Repeat (R)', () => cmd('repeat', { off: 'all', all: 'one', one: 'off' }[store.state?.repeat || 'off']));
+  els.repeat = btn('repeat', 'Repeat (R)', () => cmd('repeat', { off: 'all', all: 'one', one: 'off' }[store.state?.repeat || 'off']), 'repeat-btn');
   els.cur = h('div', { class: 'time' }, '0:00');
   els.dur = h('div', { class: 'time right' }, '0:00');
   els.fill = h('div', { class: 'prog-fill' });
@@ -51,18 +51,19 @@ export function buildBar() {
     h('div', { class: 'progress' }, els.cur, els.prog, els.dur));
 
   els.quality = h('div', { class: 'quality', title: 'Stream quality' });
-  els.fxBtn = btn('wand', 'Slowed / reverb / sped up (V)', () => openFxFor(store.state?.track));
-  els.eqBtn = btn('sliders', 'Equalizer (E)', () => import('./fxpanel.js').then((m) => m.openEq()));
-  els.bgBtn = btn('cloudRain', 'Background sounds (B)', () => import('./fxpanel.js').then((m) => m.openBg()));
-  els.lyricsBtn = btn('lyrics', 'Lyrics (Y)', () => togglePanel('lyrics'));
+  els.fxBtn = btn('wand', 'Slowed / reverb / sped up (V)', () => openFxFor(store.state?.track), 'fx-btn');
+  els.eqBtn = btn('sliders', 'Equalizer (E)', () => import('./fxpanel.js').then((m) => m.openEq()), 'eq-btn');
+  els.bgBtn = btn('cloudRain', 'Background sounds (B)', () => import('./fxpanel.js').then((m) => m.openBg()), 'bg-btn');
+  els.lyricsBtn = btn('lyrics', 'Lyrics (Y)', () => togglePanel('lyrics'), 'lyrics-btn');
   els.queueBtn = btn('queue', 'Queue (Q)', () => togglePanel('queue'));
-  els.sleepBtn = btn('moon', 'Sleep timer', (e) => sleepMenu(e));
-  els.volBtn = btn('vol', 'Mute (M)', () => cmd('mute', !store.state?.muted));
+  els.sleepBtn = btn('moon', 'Sleep timer', (e) => sleepMenu(e), 'sleep-btn');
+  els.volBtn = btn('vol', 'Mute (M) · scroll for volume', () => cmd('mute', !store.state?.muted));
   els.volFill = h('div', { class: 'prog-fill' });
   els.volThumb = h('div', { class: 'prog-thumb' });
   els.vol = h('div', { class: 'prog vol' }, h('div', { class: 'prog-track' }, els.volFill), els.volThumb);
-  els.expand = btn('expand', 'Now playing (F)', () => toggleNowPlaying());
-  const right = h('div', { class: 'bar-right' }, els.quality, els.fxBtn, els.eqBtn, els.bgBtn, els.lyricsBtn, els.queueBtn, els.sleepBtn, h('div', { class: 'volume' }, els.volBtn, els.vol), els.expand, miniBtn());
+  els.expand = btn('expand', 'Now playing (F)', () => toggleNowPlaying(), 'expand-btn');
+  els.more = btn('more', 'More', () => barMoreMenu(), 'bar-more');
+  const right = h('div', { class: 'bar-right' }, els.quality, els.fxBtn, els.eqBtn, els.bgBtn, els.lyricsBtn, els.queueBtn, els.sleepBtn, h('div', { class: 'volume' }, els.volBtn, els.vol), els.expand, miniBtn(), els.more);
   bar.append(left, center, right);
 
   slider(els.prog, (frac, done) => {
@@ -77,7 +78,9 @@ export function buildBar() {
     if (done) { cmd('volume', v); dragging = null; } else { dragging = { kind: 'vol', v }; cmdThrottled(v); }
     paintVolume(v);
   });
-  els.vol.addEventListener('wheel', (e) => { e.preventDefault(); const v = Math.max(0, Math.min(100, (store.state?.volume || 0) + (e.deltaY < 0 ? 5 : -5))); cmd('volume', v); }, { passive: false });
+  const wheelVol = (e) => { e.preventDefault(); const v = Math.max(0, Math.min(100, (store.state?.volume || 0) + (e.deltaY < 0 ? 5 : -5))); cmd('volume', v); };
+  els.vol.addEventListener('wheel', wheelVol, { passive: false });
+  els.volBtn.addEventListener('wheel', wheelVol, { passive: false });     // the slider folds away on a narrow bar
   els.prog.addEventListener('pointerenter', () => paintProgress(true));
 }
 
@@ -220,15 +223,44 @@ async function setAccent(thumb) {
   onArt(thumb, rgb);   // the theme decides: album-art accent / background, or the user's own colours
 }
 
-function sleepMenu(e) {
+function sleepItems() {
   const s = store.state?.sleep;
   const opt = (label, v) => ({ label, icon: 'moon', onClick: () => cmd('sleep', v) });
-  menu(e.clientX - 160, e.clientY - 300, [
+  return [
     s ? { label: 'Turn off sleep timer', icon: 'x', onClick: () => cmd('sleep', null) } : null,
     s ? '-' : null,
     opt('15 minutes', 15), opt('30 minutes', 30), opt('45 minutes', 45), opt('1 hour', 60), opt('2 hours', 120),
     opt('End of this song', 'track'),
-  ]);
+  ];
+}
+function sleepMenu(e) { menu(e.clientX - 160, e.clientY - 300, sleepItems()); }
+
+// "⋯" on a narrow player bar: whatever the bar had no room for. Each button is hidden by a container query in app.css,
+// so this asks the page what's hidden right now instead of keeping a second list of widths here.
+function barMoreMenu() {
+  const hidden = (el) => !!el && getComputedStyle(el).display === 'none';
+  const s = store.state;
+  const t = s?.track;
+  const items = [];
+  const q = els.quality.textContent;
+  if (hidden(els.quality) && q) items.push({ label: `Streaming ${q}`, icon: 'info', onClick: () => {} }, '-');
+  if (hidden(els.like) && t) items.push({ label: isLiked(t) ? 'Remove from Liked' : 'Like', icon: 'heart', onClick: () => toggleLike(t) });
+  if (hidden(els.shuffle)) items.push({ label: s?.shuffle ? 'Shuffle: on' : 'Shuffle: off', icon: 'shuffle', onClick: () => cmd('shuffle', !s?.shuffle) });
+  if (hidden(els.repeat)) items.push({ label: `Repeat: ${s?.repeat || 'off'}`, icon: 'repeat', onClick: () => cmd('repeat', { off: 'all', all: 'one', one: 'off' }[s?.repeat || 'off']) });
+  if (hidden(els.lyricsBtn)) items.push({ label: 'Lyrics', icon: 'lyrics', onClick: () => togglePanel('lyrics') });
+  if (hidden(els.fxBtn) && t) items.push({ label: 'Slowed / reverb / sped up…', icon: 'wand', onClick: () => openFxFor(t) });
+  if (hidden(els.eqBtn)) items.push({ label: 'Equalizer…', icon: 'sliders', onClick: () => import('./fxpanel.js').then((m) => m.openEq()) });
+  if (hidden(els.bgBtn)) items.push({ label: 'Background sounds…', icon: 'cloudRain', onClick: () => import('./fxpanel.js').then((m) => m.openBg()) });
+  if (hidden(els.sleepBtn)) items.push({ label: s?.sleep ? 'Sleep timer (on)' : 'Sleep timer', icon: 'moon', sub: sleepItems() });
+  if (hidden(els.vol)) items.push({ label: `Volume ${s?.volume ?? 0}%`, icon: 'vol', sub: [100, 80, 60, 40, 20, 10].map((v) => ({ label: `${v}%`, icon: 'vol', onClick: () => cmd('volume', v) })) });
+  if (hidden(els.expand)) items.push({ label: 'Now playing', icon: 'expand', onClick: () => toggleNowPlaying() });
+  const mb = document.querySelector('.bar-right .mini-btn');
+  if (hidden(mb)) items.push({ label: 'Mini player', icon: 'miniPlayer', onClick: () => mb.click() });
+  if (items[items.length - 1] === '-') items.pop();
+  if (!items.length) return;
+  const r = els.more.getBoundingClientRect();
+  // opens upward from the button; menu() keeps it inside the window (and divides by the page zoom)
+  menu(r.right - 250, r.top - 10 - items.length * 37, items);
 }
 
 // ------------------------------------------------------------------ side panel: queue + lyrics

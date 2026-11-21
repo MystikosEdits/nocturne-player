@@ -13,22 +13,41 @@ try { L = { ...D, ...(JSON.parse(localStorage.getItem(KEY) || '{}') || {}) }; } 
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(L)); } catch {} };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
+// Narrow windows (or a big Size on a small window): the sidebar goes to icons by itself. The width that counts is the
+// app's own CSS width (documentElement.clientWidth already divides by Settings -> Size), not the window's.
+const NARROW = 1000;
+let narrow = false, narrowOpen = false;        // narrowOpen: expanded by hand ([) while narrow, until it widens again
+const appWidth = () => document.documentElement.clientWidth || innerWidth;
+const sideMini = () => (narrow ? !narrowOpen : L.sideMini);
+
 export function applyLayout() {
   const root = document.documentElement.style;
-  root.setProperty('--side-w', `${L.sideMini ? 72 : L.sideW}px`);
-  root.setProperty('--panel-w', L.panelWide ? 'min(54vw, 780px)' : `${L.panelW}px`);
-  document.body.classList.toggle('side-mini', L.sideMini);
+  const mini = sideMini();
+  // the side panel never takes more than ~45% of the app (cqw = the app's width, correct under the page zoom)
+  root.setProperty('--side-w', `${mini ? 72 : L.sideW}px`);
+  // ...and always leaves the middle column ~400 px (a wide queue at 130% on a small window left it 380 px)
+  const sw = mini ? 72 : L.sideW;
+  root.setProperty('--panel-w', `max(260px, min(${L.panelWide ? '54cqw, 780px' : `${L.panelW}px, 46cqw`}, calc(100cqw - ${sw}px - 400px)))`);
+  document.body.classList.toggle('side-mini', mini);
+  document.body.classList.toggle('side-auto', narrow && mini);
   document.body.classList.toggle('pls-hidden', L.plsHidden);
   document.body.classList.toggle('panel-wide', L.panelWide);
-  document.querySelectorAll('.side-toggle').forEach((b) => { b.title = L.sideMini ? 'Expand the sidebar ([)' : 'Collapse the sidebar ([)'; });
+  document.querySelectorAll('.side-toggle').forEach((b) => { b.title = mini ? 'Expand the sidebar ([)' : 'Collapse the sidebar ([)'; });
   document.querySelectorAll('.panel-wide-btn').forEach((b) => { b.title = L.panelWide ? 'Narrower (])' : 'Wider (])'; b.classList.toggle('on', L.panelWide); });
 }
 
-export const toggleSidebar = () => { L.sideMini = !L.sideMini; save(); applyLayout(); };
+export const toggleSidebar = () => { if (narrow) narrowOpen = !narrowOpen; else { L.sideMini = !L.sideMini; save(); } applyLayout(); };
+function checkNarrow() {
+  const n = appWidth() < NARROW;
+  if (n === narrow) return;
+  narrow = n;
+  narrowOpen = false;
+  applyLayout();
+}
 export const togglePlaylists = () => { L.plsHidden = !L.plsHidden; save(); applyLayout(); };
 export const toggleWidePanel = () => { L.panelWide = !L.panelWide; save(); applyLayout(); };
 
-export const sideToggleBtn = () => h('button', { class: 'ibtn side-toggle', title: L.sideMini ? 'Expand the sidebar ([)' : 'Collapse the sidebar ([)', onclick: toggleSidebar }, icon('panelLeft'));
+export const sideToggleBtn = () => h('button', { class: 'ibtn side-toggle', title: sideMini() ? 'Expand the sidebar ([)' : 'Collapse the sidebar ([)', onclick: toggleSidebar }, icon('panelLeft'));
 export const panelWideBtn = () => h('button', { class: `ibtn panel-wide-btn ${L.panelWide ? 'on' : ''}`, title: L.panelWide ? 'Narrower (])' : 'Wider (])', onclick: toggleWidePanel }, icon('panelWide'));
 
 // drag an edge: `measure` gives the element's on-screen box, `toWidth` turns the pointer into a CSS width
@@ -48,16 +67,19 @@ function edge(host, cls, onDrag, onReset) {
 }
 
 export function initLayout() {
+  narrow = appWidth() < NARROW;
   applyLayout();
+  // window resized, moved to another monitor, or Settings -> Size changed: all change the app's CSS width
+  new ResizeObserver(checkNarrow).observe(document.body);
   const side = document.getElementById('side');
   const panel = document.getElementById('panel');
   // the page may be zoomed (Settings -> Size): convert screen pixels to CSS pixels through the element's own box
   edge(side, 'side-grip', (e) => {
     const r = side.getBoundingClientRect();
-    const f = r.width / (L.sideMini ? 72 : L.sideW) || 1;
+    const f = r.width / (side.offsetWidth || 1) || 1;
     const w = (e.clientX - r.left) / f;
-    if (w < 120) { if (!L.sideMini) { L.sideMini = true; applyLayout(); } return; }
-    L.sideMini = false;
+    if (w < 120) { if (narrow) { narrowOpen = false; applyLayout(); } else if (!L.sideMini) { L.sideMini = true; applyLayout(); } return; }
+    if (narrow) narrowOpen = true; else L.sideMini = false;
     L.sideW = Math.round(clamp(w, 180, 420));
     applyLayout();
   }, () => { L.sideW = D.sideW; L.sideMini = false; });
@@ -65,7 +87,7 @@ export function initLayout() {
     const r = panel.getBoundingClientRect();
     const f = r.width / (panel.offsetWidth || 1) || 1;
     L.panelWide = false;
-    L.panelW = Math.round(clamp((r.right - e.clientX) / f, 280, 780));
+    L.panelW = Math.round(clamp((r.right - e.clientX) / f, 280, Math.min(780, appWidth() * 0.46)));
     applyLayout();
   }, () => { L.panelW = D.panelW; L.panelWide = false; });
 }
