@@ -4,6 +4,13 @@
 # Safe to run again (it updates what's there).  -NoShortcuts skips the shortcuts, -NoLaunch doesn't open the app.
 param([switch]$NoShortcuts, [switch]$NoLaunch)
 $ErrorActionPreference = 'Stop'
+# "Run with PowerShell" closes the window the moment the script ends: on an error, keep it open so it can be read
+trap {
+    Write-Host "`nSetup stopped: $_" -ForegroundColor Red
+    Write-Host "Send a photo of this window to whoever gave you Nocturne." -ForegroundColor Yellow
+    if (-not $NoLaunch) { Read-Host 'Press Enter to close' }
+    exit 1
+}
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
@@ -57,4 +64,7 @@ Write-Host "mpv: $mpvExe"
 if (-not $NoShortcuts) { & $vpy "$root\tools\install_windows.py" }
 
 Write-Host "`nDone. Open Nocturne from the Start menu or the Desktop." -ForegroundColor Green
-if (-not $NoLaunch -and -not $NoShortcuts) { Start-Process "$root\.venv\Scripts\pythonw.exe" -ArgumentList "`"$root\run.py`"" -WorkingDirectory $root }
+if (-not $NoLaunch -and -not $NoShortcuts) {
+    Start-Process "$root\.venv\Scripts\pythonw.exe" -ArgumentList "`"$root\run.py`"" -WorkingDirectory $root
+    Start-Sleep -Seconds 4    # long enough to read "Done" before the window closes
+}
