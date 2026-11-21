@@ -1,0 +1,17 @@
+ytmusicapi>=1.12
+yt-dlp[default]>=2026.10.26
+deno>=2.9
+aiohttp>=3.14
+pywebview>=6.2
+pystray>=0.19
+pillow>=12
+# Windows media flyout + shortcuts
+winrt-runtime; sys_platform == "win32"
+winrt-Windows.Media; sys_platform == "win32"
+winrt-Windows.Media.Playback; sys_platform == "win32"
+winrt-Windows.Storage.Streams; sys_platform == "win32"
+winrt-Windows.Foundation; sys_platform == "win32"
+winrt-Windows.Foundation.Collections; sys_platform == "win32"
+pywin32; sys_platform == "win32"
+# macOS Now Playing / media keys
+pyobjc-framework-MediaPlayer; sys_platform == "darwin"

@@ -1,0 +1,155 @@
+[
+ {
+  "id": "rain_roof",
+  "name": "Rain on a roof",
+  "group": "Rain",
+  "icon": "cloudRain",
+  "file": "rain_roof.opus",
+  "secs": 27.0
+ },
+ {
+  "id": "rain_window",
+  "name": "Rain on a window",
+  "group": "Rain",
+  "icon": "cloudRain",
+  "file": "rain_window.opus",
+  "secs": 27.0
+ },
+ {
+  "id": "rain_forest",
+  "name": "Rain in a forest",
+  "group": "Rain",
+  "icon": "cloudRain",
+  "file": "rain_forest.opus",
+  "secs": 27.0
+ },
+ {
+  "id": "rain_lake",
+  "name": "Rain on a lake",
+  "group": "Rain",
+  "icon": "cloudRain",
+  "file": "rain_lake.opus",
+  "secs": 27.0
+ },
+ {
+  "id": "thunder",
+  "name": "Thunderstorm",
+  "group": "Rain",
+  "icon": "cloudLightning",
+  "file": "thunder.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "ocean",
+  "name": "Ocean waves",
+  "group": "Nature",
+  "icon": "waves",
+  "file": "ocean.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "stream",
+  "name": "Stream",
+  "group": "Nature",
+  "icon": "droplets",
+  "file": "stream.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "fire",
+  "name": "Fireplace",
+  "group": "Nature",
+  "icon": "flame",
+  "file": "fire.opus",
+  "secs": 81.0,
+  "gain_db": 2.5
+ },
+ {
+  "id": "night",
+  "name": "Summer night",
+  "group": "Nature",
+  "icon": "moon",
+  "file": "night.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "birds",
+  "name": "Morning birds",
+  "group": "Nature",
+  "icon": "bird",
+  "file": "birds.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "wind",
+  "name": "Winter wind",
+  "group": "Nature",
+  "icon": "wind",
+  "file": "wind.opus",
+  "secs": 27.0
+ },
+ {
+  "id": "snowstorm",
+  "name": "Snowstorm",
+  "group": "Nature",
+  "icon": "snowflake",
+  "file": "snowstorm.opus",
+  "secs": 27.0
+ },
+ {
+  "id": "cafe",
+  "name": "Coffee shop",
+  "group": "Places",
+  "icon": "coffee",
+  "file": "cafe.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "train",
+  "name": "Train ride",
+  "group": "Places",
+  "icon": "train",
+  "file": "train.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "plane",
+  "name": "Airplane cabin",
+  "group": "Places",
+  "icon": "plane",
+  "file": "plane.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "fan",
+  "name": "Fan",
+  "group": "Places",
+  "icon": "fan",
+  "file": "fan.opus",
+  "secs": 81.0
+ },
+ {
+  "id": "dark",
+  "name": "Brown noise",
+  "group": "Noise",
+  "icon": "waveform",
+  "file": "dark.opus",
+  "secs": 120.0
+ },
+ {
+  "id": "balanced",
+  "name": "Pink noise",
+  "group": "Noise",
+  "icon": "waveform",
+  "file": "balanced.opus",
+  "secs": 120.0
+ },
+ {
+  "id": "bright",
+  "name": "White noise",
+  "group": "Noise",
+  "icon": "waveform",
+  "file": "bright.opus",
+  "secs": 120.0
+ }
+]
