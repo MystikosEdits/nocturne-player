@@ -61,7 +61,6 @@ class WindowsMedia(_Base):
         self._tok1 = s.add_button_pressed(self._on_button)
         self._tok2 = s.add_playback_position_change_requested(self._on_seek)
         s.playback_status = MediaPlaybackStatus.CLOSED
-        self._last_tl = 0
 
     def _on_button(self, sender, args):
         b = args.button

@@ -81,6 +81,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         player.onChange = { [weak self] in self?.changed() }
         link.connect()
         if defaults.bool(forKey: "deskShown") { showDesk(true) }
+        // a monitor unplugged / resolution changed: pull the desktop player back onto a screen
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            guard let self, let d = self.desk else { return }
+            let r = d.frame
+            if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(r.insetBy(dx: 40, dy: 40)) }) {
+                d.setFrameOrigin(self.savedDeskOrigin(r.size, ignoreSaved: true))
+            }
+        }
         say("menu helper up (port \(port), engine pid \(enginePid.map(String.init) ?? "-"), widget \(hasWidget))")
     }
 
@@ -116,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func togglePopover() {
         if popover.isShown { popover.performClose(nil); return }
-        guard let b = item.button else { return }
+        guard item != nil, let b = item.button else { return }
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
@@ -191,6 +200,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func handleURL(_ e: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         // nocturne-menu://toggle|next|prev|open|panel (the widget's buttons)
         guard let s = e.paramDescriptor(forKeyword: keyDirectObject)?.stringValue, let u = URL(string: s) else { return }
+        if enginePid == nil && arg("--snapshot") == nil {
+            // cold-launched by a link (widget) while Nocturne wasn't running: start Nocturne (its engine starts its
+            // own helper) and leave, instead of living on as a second, orphaned menu-bar icon
+            launchApp(background: !["open", "panel"].contains(u.host ?? "open"))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { exit(0) }
+            return
+        }
         switch u.host ?? "" {
         case "toggle": controls.toggle()
         case "next": controls.next()
@@ -243,13 +259,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         desk?.orderFrontRegardless()
     }
 
-    func savedDeskOrigin(_ size: NSSize) -> NSPoint {
-        if let s = defaults.string(forKey: "deskOrigin") {
+    func savedDeskOrigin(_ size: NSSize, ignoreSaved: Bool = false) -> NSPoint {
+        if !ignoreSaved, let s = defaults.string(forKey: "deskOrigin") {
             let p = NSPointFromString(s)
             let r = NSRect(origin: p, size: size)
             if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(r.insetBy(dx: 40, dy: 40)) }) { return p }
         }
-        let v = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return .zero }   // no screen attached
+        let v = screen.visibleFrame
         return NSPoint(x: v.maxX - size.width - 24, y: v.maxY - size.height - 24)
     }
 

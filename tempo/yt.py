@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import io
-import json
 import logging
 import os
 import re
@@ -283,8 +282,11 @@ def write_cookies_txt(cookie: str) -> None:
         if not name:
             continue
         lines.append("\t".join([".youtube.com", "TRUE", "/", "TRUE", str(exp), name, value]))
-    with open(config.YT_COOKIES, "w", encoding="utf-8") as f:
+    # atomic: a half-written cookies.txt made yt-dlp quietly drop to the non-Premium stream
+    tmp = config.YT_COOKIES.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+    os.replace(tmp, config.YT_COOKIES)
 
 
 def clear_auth() -> None:
@@ -301,6 +303,7 @@ class YT:
         self.settings = settings
         self._local = threading.local()
         self._gen = 0                    # bumps when auth changes so threads rebuild clients
+        self._inval = 0                  # bumps on every invalidate(): a background refresh started before is dropped
         self.account: dict | None = None
         self.premium: bool | None = None
         self._stream_cache: dict[str, dict] = {}
@@ -371,6 +374,10 @@ class YT:
 
     def _store(self, key, val, persist):
         self._cache[key] = (time.time(), val)
+        if len(self._cache) > 400:       # every search / lyrics / playlist stayed in memory until a restart
+            with self._lock:
+                for k, _ in sorted(list(self._cache.items()), key=lambda kv: kv[1][0])[:100]:
+                    self._cache.pop(k, None)
         if persist:
             try:
                 config.write_json(self._disk_path(key), {"t": time.time(), "v": val})
@@ -383,9 +390,14 @@ class YT:
                 return
             self._refreshing.add(key)
 
+        gen, inval = self._gen, self._inval
+
         def run():
             try:
-                self._store(key, fn(), True)
+                val = fn()
+                # signed out / in, or the playlist was edited, while this loaded: its result is already stale
+                if gen == self._gen and inval == self._inval:
+                    self._store(key, val, True)
             except Exception as e:
                 log.info("background refresh %s failed: %s", key, e)
             finally:
@@ -398,6 +410,7 @@ class YT:
         return config.CACHE / "api" / f"{safe}__{tag}.json"
 
     def invalidate(self, prefix: str):
+        self._inval += 1
         for k in list(self._cache):
             if k.startswith(prefix):
                 self._cache.pop(k, None)
@@ -418,8 +431,9 @@ class YT:
                 self.account = {"name": a.get("accountName"), "handle": a.get("channelHandle"),
                                 "photo": resize_thumb(a.get("accountPhotoUrl"), 88)}
             except Exception as e:
+                # not cached: an engine started before the Wi-Fi was up used to stay nameless until the next sign-in
                 log.warning("account info failed: %s", e)
-                self.account = {"name": None, "error": str(e)[:200]}
+                return {"name": None, "error": str(e)[:200], "network": _is_network_error(e)}
         return self.account
 
     # ---------------- browse
@@ -669,7 +683,7 @@ class YT:
                     out.append({"t": (start or 0) / 1000.0, "text": text or ""})
                 return {"timed": True, "lines": out, "source": source}
             if isinstance(lines, str):
-                return {"timed": False, "lines": [{"t": None, "text": l} for l in lines.split("\n")], "source": source}
+                return {"timed": False, "lines": [{"t": None, "text": l} for l in lines.splitlines()], "source": source}
             return None
         return self.cached("ly:" + vid, 3600, load)
 
@@ -790,6 +804,11 @@ class YT:
     def wants_premium(self) -> bool:
         return self.authed and config.YT_COOKIES.exists() and self.settings.get("quality") == "best"
 
+    def stream_ready(self, vid: str) -> bool:
+        """A cached stream resolve() would hand out as-is for a queued song (Premium when Premium is wanted)."""
+        hit = self._stream_cache.get(vid)
+        return bool(hit and hit["expires"] - 300 > time.time() and (hit.get("premium") or not self.wants_premium()))
+
     def has_premium(self, vid: str) -> bool:
         hit = self._stream_cache.get(vid)
         return bool(hit and hit.get("premium") and hit["expires"] - 300 > time.time())
@@ -845,11 +864,24 @@ class YT:
             if not (prev and prev.get("premium") and not res["premium"] and prev["expires"] - 300 > now):
                 self._stream_cache[vid] = res   # never replace a Premium stream with a quick one
             if len(self._stream_cache) > 400:
-                for k in sorted(self._stream_cache, key=lambda k: self._stream_cache[k]["expires"])[:100]:
-                    self._stream_cache.pop(k, None)
+                with self._lock:      # pool + prefetch threads add to it at the same time
+                    for k, _ in sorted(list(self._stream_cache.items()), key=lambda kv: kv[1]["expires"])[:100]:
+                        self._stream_cache.pop(k, None)
             log.info("resolved %s fmt=%s %skbps via %s in %.2fs", vid, fid, res["abr"], res["client"], res["took"])
             return res
         raise RuntimeError(f"Couldn't get audio for this track ({str(last).splitlines()[0][:120] if last else 'no stream'})")
+
+
+def _is_network_error(e: Exception) -> bool:
+    """No internet / DNS / timeout, as opposed to YouTube refusing the sign-in."""
+    import socket
+    import urllib.error
+    try:
+        import requests
+        net = (requests.ConnectionError, requests.Timeout)
+    except Exception:  # noqa: BLE001
+        net = ()
+    return isinstance(e, (socket.timeout, TimeoutError, ConnectionError, urllib.error.URLError) + net)
 
 
 def _deno_path() -> str | None:

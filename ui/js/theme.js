@@ -1,7 +1,7 @@
 // Appearance: palettes (Nocturne's own + every Reaction Desk look), accent (album art / any colour / rainbow),
 // backgrounds (album art, colour, gradient, image, rainbow), tint, glass, effects (snow / starfield / embers), size,
 // corners, density, font. Applied instantly from localStorage at boot, saved to the engine (settings.theme) on change.
-import { post, get } from './api.js';
+import { get } from './api.js';
 import { applyEffects, clearSnow, FX_DEF, rbRGB } from './effects.js';
 
 export const PALETTES = {
@@ -43,7 +43,6 @@ export const DESK_LOOKS = [
   { id: 'd_summer', n: 'Summer', g: 'Seasonal', acc: '#FFC23D', wash: 0.08, washc: '#1FA7A0', fx: 'stars' },
 ];
 const LOOK_BY_ID = Object.fromEntries(DESK_LOOKS.map((l) => [l.id, l]));
-export const lookOf = (id) => LOOK_BY_ID[id] || null;
 
 export const ACCENTS = ['auto', 'rainbow', '#a78bfa', '#7c5cff', '#ff5c8a', '#f43f5e', '#fb923c', '#F2A03D', '#facc15', '#4ade80', '#2dd4bf', '#38bdf8', '#60a5fa', '#e5e7eb'];
 
@@ -233,8 +232,19 @@ export function setTheme(patch) {
   try { localStorage.setItem('tempo.theme', JSON.stringify(theme)); } catch {}
   applyTheme(theme);
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => post('/api/settings', { theme }).catch(() => {}), 400);
+  saveTimer = setTimeout(() => flushTheme(), 400);
 }
+
+// write the theme to the engine now. The 400 ms debounce used to be dropped by a reload ("Reset appearance") or by
+// closing the window, and the engine's older copy then won at the next start
+export function flushTheme(keepalive = false) {
+  if (!saveTimer && !keepalive) return Promise.resolve();
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  return fetch('/api/settings', { method: 'POST', keepalive, headers: { 'Content-Type': 'application/json', 'X-Tempo': '1' },
+    body: JSON.stringify({ theme }) }).catch(() => {});
+}
+addEventListener('pagehide', () => { if (saveTimer) flushTheme(true); });
 
 /** picking a desk look brings its accent, and a seasonal look turns its effect on (the desk's behaviour) */
 export function pickPalette(id) {
@@ -248,8 +258,6 @@ export function pickPalette(id) {
 }
 
 export function resetTheme() { setTheme(DEFAULT_THEME); }
-export const currentHue = () => rbHue();
-export const rainbowHex = (h, s, l) => rbHex(h, s, l);
 
 // the "Album art" background + automatic accent follow the song
 export function onArt(url, rgb) {

@@ -11,6 +11,7 @@ from typing import Any, Callable
 from . import config
 
 log = logging.getLogger("tempo.mpv")
+_JOB = None   # Windows job object shared by every mpv: closes (killing them) when the engine dies
 
 
 class _Proto(asyncio.Protocol):
@@ -33,7 +34,7 @@ class _Proto(asyncio.Protocol):
                     log.debug("bad ipc line %r: %s", line[:200], e)
 
     def connection_lost(self, exc):
-        self.owner._on_lost()
+        self.owner._on_lost(self)
 
 
 class Mpv:
@@ -59,7 +60,6 @@ class Mpv:
         self._restarting = False
         self._ready = False       # only report "mpv went away" once it was properly running
         self._stopping = False
-        self._job = None
         self.volume = 70
 
     # ---------------- lifecycle
@@ -128,6 +128,9 @@ class Mpv:
         if config.IS_WIN:
             self._bind_to_job()
         if not await self._try_connect(attempts=60):
+            # don't leave a half-started mpv holding the pipe name for the next try
+            if self.proc.poll() is None:
+                self.proc.kill()
             raise RuntimeError("mpv didn't start")
         for i, prop in enumerate(self.OBSERVE, start=1):
             await self.command("observe_property", i, prop)
@@ -139,8 +142,9 @@ class Mpv:
         try:
             import ctypes
             from ctypes import wintypes
+            global _JOB
             k32 = ctypes.windll.kernel32
-            if self._job is None:
+            if _JOB is None:
                 job = k32.CreateJobObjectW(None, None)
 
                 class BASIC(ctypes.Structure):
@@ -159,10 +163,10 @@ class Mpv:
                 info = EXT()
                 info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
                 k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
-                self._job = job
+                _JOB = job
             h = k32.OpenProcess(0x1F0FFF, False, self.proc.pid)
             if h:
-                k32.AssignProcessToJobObject(self._job, h)
+                k32.AssignProcessToJobObject(_JOB, h)
                 k32.CloseHandle(h)
         except Exception as e:
             log.debug("job object failed: %s", e)
@@ -184,7 +188,9 @@ class Mpv:
                 await asyncio.sleep(0.1)
         return False
 
-    def _on_lost(self):
+    def _on_lost(self, proto=None):
+        if proto is not None and proto is not self.proto:
+            return      # an old connection (e.g. to the leftover mpv start() asked to quit) closing late
         self.connected = False
         for f in self._pending.values():
             if not f.done():
@@ -216,11 +222,6 @@ class Mpv:
                     break
             if self.proc.poll() is None:
                 self.proc.kill()
-
-    def kill(self):
-        self._stopping = True
-        if self.proc and self.proc.poll() is None:
-            self.proc.kill()
 
     # ---------------- messages
     def _on_message(self, msg: dict):

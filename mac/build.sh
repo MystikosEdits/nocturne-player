@@ -21,7 +21,7 @@ ARCH="$(uname -m)"
 
 ID="${NOCTURNE_SIGN_ID:-}"
 if [ -z "$ID" ]; then
-  ID="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/"(Apple Development|Developer ID Application|Mac Developer)/{print $2; exit}')" || true
+  ID="$(security find-identity -v -p codesigning 2>/dev/null | awk '/"(Apple Development|Developer ID Application|Mac Developer)/{print $2; exit}')" || true
 fi
 
 STAMP="$( (cat "$HERE"/menu/*.swift "$HERE"/widget/*.swift "$HERE/build.sh" "$ROOT/assets/nocturne-tray-mac.png"; echo "$ID $ARCH") | shasum | cut -c1-16)"
@@ -66,8 +66,9 @@ cat > "$B/Contents/Info.plist" <<'EOF'
 </dict></plist>
 EOF
 
-if [ -n "$ID" ]; then
-  echo "signing identity found ($ID): building the widget too..."
+# the widget is a bonus: if it fails to build or sign (e.g. a locked keychain over ssh), the helper is still made,
+# ad-hoc signed and without it (set -e used to abort the whole build = no menu-bar panel at all)
+build_widget() {
   X="$B/Contents/PlugIns/NowPlaying.appex"
   mkdir -p "$X/Contents/MacOS"
   xcrun swiftc -O -swift-version 5 -target "$ARCH-apple-macos14.0" -sdk "$SDK" -module-name NocturneWidget \
@@ -100,6 +101,15 @@ EOF
 EOF
   codesign -f -s "$ID" --options runtime --entitlements "$TMP/widget.entitlements" "$X"
   codesign -f -s "$ID" --options runtime "$B"
+}
+if [ -n "$ID" ]; then
+  echo "signing identity found ($ID): building the widget too..."
+  if ! (set -e; build_widget); then
+    echo "widget build/signing failed: making the helper without it"
+    rm -rf "$B/Contents/PlugIns"
+    ID=""
+    codesign -f -s - "$B"
+  fi
 else
   codesign -f -s - "$B"
 fi

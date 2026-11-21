@@ -1,6 +1,6 @@
 // Shared state + UI building blocks.
-import { I, eq } from './icons.js';
-import { get, post, cmd, dropCache } from './api.js';
+import { I } from './icons.js';
+import { get, post, dropCache } from './api.js';
 
 // ------------------------------------------------------------------ store
 export const store = {
@@ -96,12 +96,23 @@ export function artistLinks(artists, plain = false) {
 }
 
 // ------------------------------------------------------------------ toasts
-export function toast(text, kind = 'info') {
+// toast(text, kind, { action: 'Undo', onAction, onDone }): with an action it stays 6 s and has a button; onDone runs
+// when it goes away (clicked or not), so a removal can be written only once Undo is no longer possible
+export function toast(text, kind = 'info', { action, onAction, onDone } = {}) {
   const host = document.getElementById('toasts');
-  const t = h('div', { class: `toast ${kind}` }, text);
+  const t = h('div', { class: `toast ${kind} ${action ? 'has-action' : ''}` }, h('span', null, text));
+  let gone = false;
+  const hide = () => {
+    if (gone) return;
+    gone = true;
+    t.classList.remove('in');
+    setTimeout(() => t.remove(), 300);
+    onDone && onDone();
+  };
+  if (action) t.append(h('button', { class: 'toast-act', onclick: () => { onAction && onAction(); hide(); } }, action));
   host.append(t);
   requestAnimationFrame(() => t.classList.add('in'));
-  setTimeout(() => { t.classList.remove('in'); setTimeout(() => t.remove(), 300); }, kind === 'error' ? 4500 : 2600);
+  setTimeout(hide, action ? 6000 : kind === 'error' ? 4500 : 2600);
 }
 
 export async function run(fn, okText) {
@@ -112,7 +123,12 @@ export async function run(fn, okText) {
 export function modal({ title, body, actions = [], wide = false, onClose }) {
   const back = h('div', { class: 'modal-back' });
   const close = () => { back.classList.remove('in'); setTimeout(() => back.remove(), 200); onClose && onClose(); document.removeEventListener('keydown', esc, true); };
-  const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  const esc = (e) => {
+    if (e.key !== 'Escape') return;
+    const all = document.querySelectorAll('.modal-back');
+    if (all[all.length - 1] !== back) return;     // only the dialog on top
+    e.stopPropagation(); close();
+  };
   const box = h('div', { class: `modal ${wide ? 'wide' : ''}` },
     h('div', { class: 'modal-head' }, h('div', { class: 'modal-title' }, title), btn('x', 'Close', close)),
     h('div', { class: 'modal-body' }, body),
@@ -148,7 +164,8 @@ export function closeMenu() {
 // a press inside ANY menu (a submenu is its own element on <body>, not inside openMenu) must not close it: this
 // used to close everything on mousedown, so a submenu item's click never ran ("Add to playlist" ▸ did nothing)
 document.addEventListener('mousedown', (e) => { if (openMenu && !e.target.closest?.('.menu')) closeMenu(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+// Esc with a menu open only closes the menu (not the selection / Now Playing behind it)
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (openMenu || document.querySelector('.menu'))) { closeMenu(); e.stopImmediatePropagation(); } });
 window.addEventListener('blur', closeMenu);
 
 export function menu(x, y, items) {
@@ -294,8 +311,9 @@ export function trackMenu(t, x, y, opts = {}) {
       if (name) { await run(() => post('/api/versions/rename', { vid: t.version_id, title: name })); emit('versions-changed'); }
     } } : null,
     isVersion ? { label: 'Delete version', icon: 'trash', danger: true, onClick: async () => {
-      await run(() => post('/api/versions/delete', { vid: t.version_id }), 'Version deleted');
+      const r = await run(() => post('/api/versions/delete', { vid: t.version_id }));
       emit('versions-changed');
+      if (r?.version) toast(`Deleted “${t.title}”`, 'info', { action: 'Undo', onAction: () => post('/api/versions/restore', { version: r.version }).then(() => emit('versions-changed')).catch((e) => toast(e.message, 'error')) });
     } } : null,
     '-',
     { label: isLiked(t) ? 'Remove from liked songs' : 'Like', icon: isLiked(t) ? 'heartFill' : 'heart', onClick: () => toggleLike(t) },
@@ -335,9 +353,7 @@ export function prefetchOnHover(el, getIds) {
   el.addEventListener('mouseleave', () => clearTimeout(hoverTimer));
 }
 
-// ------------------------------------------------------------------ track lists
-const rowH = () => (document.body.classList.contains('compact') ? 46 : 56);
-
+// ------------------------------------------------------------------ track lists (tracklist.js)
 // hovering a playlist / album / artist loads it in the background, so the click opens instantly
 let pageHoverTimer = null;
 export function prefetchPageOnHover(el, item) {
@@ -351,98 +367,6 @@ export function prefetchPageOnHover(el, item) {
 }
 
 export function currentId() { return store.state?.track?.id; }
-
-export function trackList(tracks, opts = {}) {
-  // opts: context, showAlbum, showArt (default true), numbered, playlistId (owned -> remove option), virtual
-  const showArt = opts.showArt !== false;
-  const list = h('div', { class: `tracks ${showArt ? '' : 'noart'} ${opts.showAlbum === false ? 'noalbum' : ''}` });
-  const header = h('div', { class: 'trow thead' },
-    h('div', { class: 'c-num' }, '#'), h('div', { class: 'c-title' }, 'Title'),
-    opts.showAlbum === false ? null : h('div', { class: 'c-album' }, 'Album'),
-    h('div', { class: 'c-dur' }, icon('clock')), h('div', { class: 'c-act' }));
-  if (opts.header !== false) list.append(header);
-
-  const playAt = (i) => {
-    if (opts.onPlay) return opts.onPlay(i);
-    playTracks(tracks, i, opts.context || null);
-  };
-
-  const row = (t, i) => {
-    const cur = currentId() === t.id;
-    const r = h('div', { class: `trow ${cur ? 'playing' : ''} ${t.unavailable ? 'dim' : ''}`, dataset: { tid: t.id, i: String(i) } });
-    const num = h('div', { class: 'c-num' }, h('span', { class: 'n' }, String(i + 1)), h('span', { class: 'eqw', html: eq() }),
-      h('button', { class: 'rowplay', title: 'Play', onclick: (e) => { e.stopPropagation(); if (cur) cmd('toggle'); else playAt(i); } }, icon('play')));
-    const title = h('div', { class: 'c-title' },
-      showArt ? img(t.thumb, 'sm', false) : null,
-      h('div', { class: 'tt' },
-        h('div', { class: 'tname' }, t.title, t.explicit ? h('span', { class: 'explicit', title: 'Explicit' }, 'E') : null,
-          t.type === 'video' && opts.badgeVideos ? h('span', { class: 'badge' }, 'Video') : null,
-          store.downloads.ids.has(t.id) ? h('span', { class: 'dlmark', title: 'Downloaded', html: I.downloaded }) : null),
-        h('div', { class: 'tsub' }, artistLinks(t.artists), t.views && opts.showViews ? h('span', { class: 'muted' }, ` • ${t.views}`) : null)));
-    const album = opts.showAlbum === false ? null : h('div', { class: 'c-album' }, t.album?.id ? h('a', { href: `#/album/${t.album.id}`, onclick: (e) => e.stopPropagation() }, t.album.name) : (t.album?.name || ''));
-    const like = h('button', { class: `ibtn like ${isLiked(t) ? 'on' : ''}`, title: 'Like', onclick: (e) => { e.stopPropagation(); toggleLike(t); } }, icon(isLiked(t) ? 'heartFill' : 'heart'));
-    const more = btn('more', 'More', (e) => trackMenu(t, e.clientX, e.clientY, { extra: rowExtra(t, i) }));
-    r.append(...[num, title, album, h('div', { class: 'c-dur' }, t.dur ? fmtTime(t.dur) : ''), h('div', { class: 'c-act' }, like, more)].filter(Boolean));
-    r.addEventListener('dblclick', () => playAt(i));
-    r.addEventListener('contextmenu', (e) => { e.preventDefault(); trackMenu(t, e.clientX, e.clientY, { extra: rowExtra(t, i) }); });
-    prefetchOnHover(r, () => [t.id]);
-    return r;
-  };
-
-  const rowExtra = (t, i) => {
-    const out = [];
-    if (opts.playlistId && opts.owned && t.setVideoId) {
-      out.push('-', { label: 'Remove from this playlist', icon: 'trash', danger: true, onClick: async () => {
-        await run(() => post('/api/playlist/remove', { playlistId: opts.playlistId, items: [t] }), 'Removed');
-        dropCache('/api/playlist/' + opts.playlistId);
-        opts.onChanged && opts.onChanged();
-      } });
-    }
-    if (opts.extraMenu) out.push(...opts.extraMenu(t, i));
-    return out;
-  };
-
-  const body = h('div', { class: 'tbody' });
-  list.append(body);
-  if (tracks.length > 120 && opts.virtual !== false) {
-    // windowed rendering for long playlists: only rows near the viewport exist
-    const RH = rowH();
-    body.style.height = tracks.length * RH + 'px';
-    body.classList.add('virtual');
-    const rendered = new Map();
-    const scroller = () => document.getElementById('main-scroll');
-    const update = () => {
-      const sc = scroller();
-      if (!sc || !body.isConnected) return;
-      // getBoundingClientRect is in screen pixels; rows and clientHeight are in CSS pixels. Under Settings -> Size the
-      // two differ (x0.9 at 90%), and deep in a long playlist the rows were drawn far from the screen: all blank.
-      const top = (body.getBoundingClientRect().top - sc.getBoundingClientRect().top) / pageZoom();
-      const first = Math.max(0, Math.floor(-top / RH) - 10);
-      const last = Math.min(tracks.length - 1, Math.ceil((-top + sc.clientHeight) / RH) + 10);
-      for (const [i, el] of rendered) if (i < first || i > last) { el.remove(); rendered.delete(i); }
-      for (let i = first; i <= last; i++) {
-        if (rendered.has(i)) continue;
-        const el = row(tracks[i], i);
-        el.style.position = 'absolute';
-        el.style.top = i * RH + 'px';
-        el.style.left = '0'; el.style.right = '0';
-        body.append(el);
-        rendered.set(i, el);
-      }
-    };
-    requestAnimationFrame(() => {
-      const sc = scroller();
-      sc && sc.addEventListener('scroll', update, { passive: true });
-      window.addEventListener('resize', update);
-      update();
-    });
-    list._refresh = () => { for (const el of rendered.values()) el.remove(); rendered.clear(); update(); };
-  } else {
-    tracks.forEach((t, i) => body.append(row(t, i)));
-    list._refresh = () => { body.innerHTML = ''; tracks.forEach((t, i) => body.append(row(t, i))); };
-  }
-  return list;
-}
 
 // keep "now playing" highlight + like hearts in sync everywhere
 export function refreshPlaying() {
@@ -563,8 +487,20 @@ export function skeleton(kind = 'shelves') {
   return s;
 }
 
+// what a failed page says: plain words for the usual causes, the raw error only as a tooltip
 export function errorBox(e, retry) {
-  return empty('info', 'Something went wrong', e?.message || String(e), retry ? h('button', { class: 'btn', onclick: retry }, 'Try again') : null);
+  const raw = e?.message || String(e);
+  let title = 'Something went wrong', text = raw;
+  if (/ConnectionError|HTTPSConnectionPool|Max retries|getaddrinfo|NameResolution|timed out|Temporary failure|Network is unreachable|URLError/i.test(raw)) {
+    title = 'Can’t reach YouTube Music'; text = 'Check your internet connection, then try again. Downloaded songs still play.';
+  } else if (/Sign in|signed in|401|403|Forbidden/i.test(raw)) {
+    title = 'Sign-in needed'; text = 'Connect YouTube Music in Settings to open this.';
+  } else if (/404|not found|KeyError|NoneType/i.test(raw)) {
+    title = 'Couldn’t open this'; text = 'YouTube Music didn’t return it. It may have been removed or made private.';
+  }
+  const box = empty('info', title, text, retry ? h('button', { class: 'btn', onclick: retry }, 'Try again') : null);
+  box.title = raw;
+  return box;
 }
 
 // accent colour from artwork

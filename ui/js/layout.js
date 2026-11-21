@@ -4,7 +4,7 @@
 //   panel     queue / lyrics: drag its edge, or the wide button (])
 //   mini      a small always-on-top player window (P); the restore button / P puts the window back where it was
 // Remembered per computer in localStorage.
-import { h, icon } from './ui.js';
+import { h, icon, pageZoom } from './ui.js';
 
 const KEY = 'tempo.layout';
 const D = { sideW: 236, sideMini: false, plsHidden: false, panelW: 344, panelWide: false };
@@ -58,9 +58,14 @@ function edge(host, cls, onDrag, onReset) {
     grip.setPointerCapture(e.pointerId);
     document.body.classList.add('resizing');
     const move = (ev) => onDrag(ev);
-    const up = () => { document.body.classList.remove('resizing'); grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); save(); };
+    const up = () => {
+      document.body.classList.remove('resizing');
+      grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('lostpointercapture', up);
+      save();
+    };
     grip.addEventListener('pointermove', move);
     grip.addEventListener('pointerup', up);
+    grip.addEventListener('lostpointercapture', up);
   });
   grip.addEventListener('dblclick', () => { onReset(); save(); applyLayout(); });
   host.append(grip);
@@ -94,16 +99,16 @@ export function initLayout() {
 
 // ------------------------------------------------------------------ mini player
 let mini = false;
-export const isMini = () => mini;
 export async function toggleMini(force) {
   const on = force !== undefined ? force : !mini;
   if (on === mini) return;
   mini = on;
   document.body.classList.toggle('mini', on);
+  dispatchEvent(new Event('tempo-mini'));     // effects.js: canvases are hidden in the mini player, so stop their loops
   if (on) document.body.classList.remove('np-open');
   const api = window.pywebview?.api;
   if (api?.mini) {
-    const zoom = parseFloat(document.documentElement.style.zoom || '1') || 1;
+    const zoom = pageZoom();
     try { await api.mini(on, Math.round(440 * zoom), Math.round(136 * zoom), window.devicePixelRatio || 1); } catch {}
   }
   document.querySelectorAll('.mini-btn').forEach((b) => { b.title = on ? 'Back to the full window (P)' : 'Mini player (P)'; b.replaceChildren(icon(on ? 'maximize' : 'miniPlayer')); });

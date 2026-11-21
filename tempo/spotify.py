@@ -117,7 +117,7 @@ class Spotify:
                     return json.loads(r.read())
             except urllib.error.HTTPError as e:
                 if e.code == 429:
-                    time.sleep(int(e.headers.get("Retry-After", "2")) + 0.5)
+                    time.sleep(_retry_after(e))
                     continue
                 if e.code == 401 and attempt == 0:
                     self.data.pop("access_token", None)
@@ -183,9 +183,10 @@ class Spotify:
                     names.get(pid, pid)) for pid in playlist_ids]
         self._start(sources, "Reading Spotify…")
 
-    def start_link_match(self, text: str):
-        """Any public Spotify playlist / album / song links (anyone's), no Spotify sign-in needed."""
-        links = parse_links(text)
+    def start_link_match(self, text: str, links: list | None = None):
+        """Any public Spotify playlist / album / song links (anyone's), no Spotify sign-in needed.
+        `links` = parse_links(text) done by the caller off the event loop (short links are fetched)."""
+        links = parse_links(text) if links is None else links
         if not links:
             raise RuntimeError("That doesn't look like a Spotify link")
         sources = []
@@ -214,7 +215,7 @@ class Spotify:
             res = read_full(kind, sid, d.get("total") or 0, self.job)
             if res.get("rows") and len(res["rows"]) > len(d["rows"]):
                 d.update(rows=res["rows"], total=max(len(res["rows"]), res.get("total") or 0), more=False,
-                         full=True, full_seconds=res.get("seconds"))
+                         full=True)
                 if not res.get("complete"):
                     d["more"] = True
                     d["short_reason"] = res.get("error") or ("reading took too long" if res.get("timed_out")
@@ -261,7 +262,7 @@ class Spotify:
             uniq = {}
             for l in lists:
                 for r in l["rows"]:
-                    uniq.setdefault(r["sid"] or (r["name"] + "|" + ",".join(r["artists"])), r)
+                    uniq.setdefault(_row_key(r), r)
             self.job.update(phase="matching", total=len(uniq), done=0, message="Finding songs on YouTube Music…")
             cache = config.read_json(config.CACHE / "spotify_cache.json", {}) or {}
             keys = list(uniq)
@@ -276,17 +277,20 @@ class Spotify:
                     m = {"status": "missing", "error": str(e)[:120]}
                 return key, m
 
+            results = {}
             with ThreadPoolExecutor(max_workers=6) as ex:
                 for key, m in ex.map(work, keys):
-                    cache[key] = m
+                    results[key] = m
+                    if not m.get("error"):       # a failed lookup (offline, rate-limited) is tried again next time
+                        cache[key] = m
                     self.job["done"] += 1
             config.write_json(config.CACHE / "spotify_cache.json", cache)
             out_lists = []
             for l in lists:
                 items = []
                 for r in l["rows"]:
-                    key = r["sid"] or (r["name"] + "|" + ",".join(r["artists"]))
-                    items.append({"src": r, "match": cache.get(key)})
+                    key = _row_key(r)
+                    items.append({"src": r, "match": results.get(key) or cache.get(key)})
                 out_lists.append({"id": l["id"], "name": l["name"], "items": items, "total": l.get("total"),
                                   "url": l.get("url"), "short_reason": l.get("short_reason")})
             counts = {"good": 0, "unsure": 0, "missing": 0}
@@ -366,7 +370,7 @@ class Spotify:
                     self.job["message"] = f"Creating “{name}”…"
                     pid = yt.create_playlist(name, None, "Imported from Spotify")
                     for k in range(0, len(ids), 50):
-                        yt.add_to_playlist(pid, ids[k:k + 50])
+                        _add_batch(yt, pid, ids[k:k + 50])
                         self.job["done"] += min(50, len(ids) - k)
                     made.append({"name": name, "count": len(ids), "id": pid})
                 self.job["done"] = min(self.job["total"], self.job["done"] + (len(l["items"]) - len(ids)))
@@ -376,6 +380,27 @@ class Spotify:
             log.exception("import failed")
             self.job.update(phase="error", finished=True, error=str(e)[:300])
         self.engine.loop.call_soon_threadsafe(lambda: self.engine.emit("spotify", self.status()))
+
+
+def _row_key(r: dict) -> str:
+    return r["sid"] or (r["name"] + "|" + ",".join(r["artists"]))
+
+
+def _add_batch(yt, pid: str, ids: list[str]):
+    """Add songs to a playlist made a moment ago: it can refuse edits for a second, and YouTube refuses a WHOLE batch
+    when one song in it is refused (already there / unavailable), so retry, then go one by one."""
+    for attempt in range(3):
+        try:
+            yt.add_to_playlist(pid, ids)
+            return
+        except RuntimeError:
+            if attempt < 2:
+                time.sleep(1.2)
+    for vid in ids:
+        try:
+            yt.add_to_playlist(pid, [vid])
+        except RuntimeError as e:
+            log.info("import: %s refused (%s)", vid, e)
 
 
 # ---------------- public links (anyone's playlist, no Spotify sign-in)
@@ -391,6 +416,17 @@ _SHORT = re.compile(r"https?://(?:spotify\.link|spoti\.fi)/[A-Za-z0-9_-]+")
 _NEXT = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
 
 
+def _retry_after(e) -> float:
+    """Seconds to wait after a 429. Spotify can ask for minutes (or send a date): never hang an import on it."""
+    try:
+        wait = float(e.headers.get("Retry-After") or 2)
+    except (TypeError, ValueError):
+        wait = 5
+    if wait > 30:
+        raise RuntimeError("Spotify is rate-limiting Nocturne right now, try again in a few minutes")
+    return wait + 0.5
+
+
 def is_link(text: str) -> bool:
     t = (text or "").strip()
     return bool(re.search(r"(open\.spotify\.com/|spotify:(playlist|album|track):|spotify\.link/|spoti\.fi/)", t))
@@ -404,7 +440,7 @@ def _fetch(url: str, ua: str = _EMBED_UA, timeout: float = 20) -> str:
                 return r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < 2:
-                time.sleep(int(e.headers.get("Retry-After") or 2) + 0.5)
+                time.sleep(_retry_after(e))
                 continue
             if e.code == 404:
                 raise RuntimeError("Spotify couldn't find that — check the link")
@@ -602,9 +638,11 @@ _DASH = re.compile(r"\s+-\s+(.*(remaster|version|edit|mix|mono|stereo|live|radio
 
 
 def norm(s: str) -> str:
-    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
-    s = s.lower().replace("&", "and")
-    s = re.sub(r"[^a-z0-9 ]+", " ", s)
+    # strip accents but keep letters of every script: the old ASCII-only version turned Japanese / Korean / Cyrillic
+    # titles into "" and "" == "" scored every K-pop or Russian song as a perfect match
+    s = "".join(ch for ch in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(ch))
+    s = s.casefold().replace("&", "and")
+    s = re.sub(r"[^\w ]+|_", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -616,11 +654,11 @@ def clean_title(s: str) -> str:
 
 def score(r: dict, c: dict) -> float:
     t1, t2 = norm(clean_title(r["name"])), norm(clean_title(c["title"]))
-    title = difflib.SequenceMatcher(None, t1, t2).ratio()
-    if t1 and (t1 in t2 or t2 in t1):
+    title = difflib.SequenceMatcher(None, t1, t2).ratio() if t1 and t2 else 0.5   # nothing comparable: unknown
+    if t1 and t2 and (t1 in t2 or t2 in t1):
         title = max(title, 0.9)
-    sa = {norm(a) for a in r["artists"] if a}
-    ca = {norm(a["name"]) for a in c.get("artists") or []}
+    sa = {norm(a) for a in r["artists"] if a} - {""}
+    ca = {norm(a["name"]) for a in c.get("artists") or []} - {""}
     if sa and ca:
         inter = len(sa & ca)
         artist = 1.0 if inter else max(difflib.SequenceMatcher(None, " ".join(sorted(sa)), " ".join(sorted(ca))).ratio() - 0.2, 0)

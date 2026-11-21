@@ -2,7 +2,7 @@
 // Reaction Desk look, its rainbow options and its three effects (snow / starfield / embers) with all their knobs.
 import { post } from './api.js';
 import { h, icon, toast } from './ui.js';
-import { PALETTES, DESK_LOOKS, ACCENTS, FONTS, getTheme, setTheme, resetTheme, onTheme, paletteOf, pickPalette } from './theme.js';
+import { PALETTES, DESK_LOOKS, ACCENTS, FONTS, getTheme, setTheme, resetTheme, flushTheme, onTheme, paletteOf, pickPalette } from './theme.js';
 import { FX_DEF, FX_KNOBS, fmtKnob, clearSnow } from './effects.js';
 
 function seg(options, value, onPick) {
@@ -203,15 +203,16 @@ export function appearanceSection() {
   card.append(row('Effect', 'From the Reaction Desk. Paused whenever the window is hidden or minimised.', fxSeg), fxBox);
   renderFx();
   // a seasonal look switches the effect: keep the control in step
-  let lastFx = t.fx.type;
+  let lastFx = t.fx.type, lastShovel = !!t.fx.snow?.shovel;
   const off = onTheme((th) => {
+    if (!card.isConnected) { off(); return; }      // Settings was left: stop listening
     syncRb(th);
     if (th.fx.type !== lastFx) {
       lastFx = th.fx.type;
       fxSeg.querySelectorAll('.seg-b').forEach((b) => b.classList.toggle('on', b.dataset.v === th.fx.type));
       renderFx();
-    }
-    if (!card.isConnected) off();
+    } else if (!!th.fx.snow?.shovel !== lastShovel) renderFx();   // Esc put the shovel down: untick it
+    lastShovel = !!th.fx.snow?.shovel;
   });
 
   // now playing
@@ -224,7 +225,7 @@ export function appearanceSection() {
     row('Density', 'Compact fits more songs on screen.', seg([['comfortable', 'Comfortable'], ['compact', 'Compact']], t.density, (v) => setTheme({ density: v }))),
     row('Font', null, seg(Object.entries(FONTS).map(([k, f]) => [k, f.name]), t.font, (v) => setTheme({ font: v }))),
     row('Colour page headers', 'Albums, playlists and artists glow in their artwork’s colour.', toggleEl(t.tint, (v) => setTheme({ tint: v }))),
-    row('Reset', 'Back to the original Nocturne look.', h('button', { class: 'btn', onclick: () => { resetTheme(); location.reload(); } }, 'Reset appearance')),
+    row('Reset', 'Back to the original Nocturne look.', h('button', { class: 'btn', onclick: () => { resetTheme(); flushTheme().then(() => location.reload()); } }, 'Reset appearance')),
   );
   return h('section', { class: 'set-sec' }, h('h2', null, 'Appearance'), card);
 }

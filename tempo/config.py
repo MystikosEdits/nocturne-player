@@ -104,6 +104,8 @@ def write_json(path: Path, data) -> None:
     with _write_lock:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())   # a power cut must not leave settings / sign-in as an empty file
         os.replace(tmp, path)
 
 

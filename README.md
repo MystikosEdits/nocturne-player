@@ -10,6 +10,12 @@ about 65 MB with the window closed, and the music keeps going when you close the
   from any song, autoplay that keeps going. Covers, remixes and anything else on YouTube play too (paste a link).
 - **Gapless playback**, synced lyrics, a full-screen Now Playing view, queue with drag to reorder, sleep timer,
   downloads for offline listening, media keys and the Windows / macOS media controls.
+- **Song lists that work like a desktop app**: click to select, Ctrl/⌘ or Shift to select more, then play, queue,
+  add to a playlist, download or remove them all at once (or right-click the selection). Drag songs onto a playlist in
+  the sidebar or onto the queue. Find and sort inside any playlist, album, Liked songs, My versions or Downloads, and
+  jump to the song that's playing. Removing songs (from a playlist or the queue) has **Undo**.
+- **Queue**: save it as a playlist, shuffle what's next, clear it (with Undo), "Stop after this song" in the sleep timer.
+- **Search**: suggestions as you type and your recent searches when the box is empty.
 - **Slowed / reverb / sped up / muffled versions** of any song (right-click it), saved to "My versions" and usable
   in playlists. Or put an effect on every song.
 - **10-band equalizer** with presets, plus volume levelling.
@@ -55,9 +61,15 @@ about 65 MB with the window closed, and the music keeps going when you close the
 
 ## Keyboard
 
-Space play/pause · Ctrl ←/→ previous/next · ←/→ seek 10 s · Ctrl ↑/↓ volume · L like · S shuffle · R repeat ·
-Q queue · Y lyrics · F Now Playing · V slowed/reverb · E equalizer · B background sounds · `[` sidebar ·
-`]` wide panel · P mini player · Ctrl K search
+Press **?** in the app for this list (it's also in Settings). On a Mac, Ctrl = ⌘.
+
+- **Playback**: Space play/pause · Ctrl ←/→ previous/next · ←/→ seek 10 s · Ctrl ↑/↓ volume · M mute · L like ·
+  S shuffle · R repeat
+- **Song lists**: click select · Ctrl click add to selection · Shift click range · Ctrl A select all · Enter play the
+  selection · Delete remove from your playlist · Esc clear · Ctrl F find in the list · drag onto a playlist / the queue
+- **Views**: Ctrl K or / search · Q queue · Y lyrics · F Now Playing · P mini player · `[` sidebar · `]` wide panel ·
+  Alt ←/→ back/forward · ? shortcuts
+- **Sound**: V slowed/reverb/sped up · E equalizer · B background sounds on/off
 
 ## Notes
 

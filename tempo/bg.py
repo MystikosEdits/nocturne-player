@@ -27,7 +27,6 @@ def _catalog() -> list[dict]:
 
 
 SOUNDS_FULL = _catalog()
-SOUNDS = [(s["id"], s["name"]) for s in SOUNDS_FULL]          # (id, name), kept for older callers
 _BY_ID = {s["id"]: s for s in SOUNDS_FULL}
 
 # ready-made mixes for the panel (id -> level)
@@ -59,8 +58,8 @@ class Background:
             old = LEGACY.get(st.get("sound"), st.get("sound")) or "rain_roof"
             mix = {old: 100}
         mix = {k: max(0, min(100, int(v))) for k, v in mix.items() if k in _BY_ID}
-        if not mix and SOUNDS:
-            mix = {SOUNDS[0][0]: 100}
+        if not mix and SOUNDS_FULL:
+            mix = {SOUNDS_FULL[0]["id"]: 100}
         st["mix"] = mix
         st["sound"] = next(iter(st["mix"]), "")          # the first one, for the settings row
         return st

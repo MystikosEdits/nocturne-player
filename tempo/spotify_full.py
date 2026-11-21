@@ -132,14 +132,17 @@ def scroll_collect(evaluate, kind: str, total: int, timeout: float, t0: float) -
     rows = [{"sid": v[1], "name": v[0], "artists": v[2], "album": v[3], "ms": _ms(v[4]), "n": k}
             for k, v in sorted(seen.items())]
     return {"title": title, "rows": rows, "total": total, "seconds": round(time.time() - t0, 1),
-            "complete": bool(total) and len(rows) >= total, "loaded_after": round(t_load - t0, 1),
+            "complete": bool(total) and len(rows) >= total,
             "timed_out": time.time() - t0 >= timeout}
 
 
 def _watchdog(timeout: float, cleanup=None):
     def run():   # browser calls can block forever: never outlive the deadline (the engine kills us at +30 s)
         time.sleep(timeout + 15)
-        say({"error": "timed out"})
+        try:
+            say({"error": "timed out"})
+        except Exception:   # noqa: BLE001  (stdout gone = the engine went away: still clean up below)
+            pass
         if cleanup:
             try:
                 cleanup()
@@ -171,8 +174,6 @@ def find_browser() -> str | None:
                     return path
     return None
 
-
-find_edge = find_browser   # old name
 
 
 def _job_kill_on_close(proc):
@@ -247,7 +248,8 @@ def read_headless(browser: str, kind: str, pid: str, total: int, timeout: float)
             except Exception:   # noqa: BLE001
                 proc.kill()
     _watchdog(timeout, kill_tree)
-    job = _job_kill_on_close(proc) if sys.platform == "win32" else None   # noqa: F841  (held open on purpose)
+    if sys.platform == "win32":
+        _job_kill_on_close(proc)   # a raw handle: it stays open until this process ends, then the job kills Edge
     try:
         while not port_file.exists() or len(port_file.read_text().split()) < 2:
             if proc.poll() is not None:

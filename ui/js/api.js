@@ -1,13 +1,17 @@
 // Talking to the Tempo engine.
+// the engine itself not answering (restarting after an update, or quit): say so instead of "Failed to fetch"
+const DOWN = "Can't reach Nocturne's player right now (it may be restarting). Try again in a moment.";
+const req = (path, opts) => fetch(path, opts).catch(() => { throw new Error(DOWN); });
+
 export async function get(path) {
-  const r = await fetch(path, { cache: 'no-store' });
+  const r = await req(path, { cache: 'no-store' });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`);
   return j;
 }
 
 export async function post(path, body = {}) {
-  const r = await fetch(path, {
+  const r = await req(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Tempo': '1' },
     body: JSON.stringify(body),

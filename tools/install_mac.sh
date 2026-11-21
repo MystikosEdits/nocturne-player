@@ -56,6 +56,9 @@ LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.
 HELPER=""
 if bash "$ROOT/mac/build.sh" "$ROOT/mac/build"; then
   mkdir -p "$APP/Contents/Helpers"
+  # a fresh copy, never over the old one: rewriting a running signed binary in place gets it killed (Code
+  # Signature Invalid) and old files (a stale widget) would break the bundle's seal
+  rm -rf "$APP/Contents/Helpers/NocturneMenu.app"
   cp -R "$ROOT/mac/build/NocturneMenu.app" "$APP/Contents/Helpers/"
   HELPER="$APP/Contents/Helpers/NocturneMenu.app"
 else

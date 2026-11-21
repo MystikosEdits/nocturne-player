@@ -99,9 +99,6 @@ class JsApi:
         except Exception as e:      # noqa: BLE001
             return {"error": str(e)}
 
-    def platform(self):
-        return "mac" if config.IS_MAC else "win"
-
     def bring_to_front(self):
         """Called by the page when the engine says 'show' (tray icon / launching Tempo again)."""
         if self._window:

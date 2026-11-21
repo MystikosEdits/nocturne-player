@@ -122,11 +122,8 @@ class Engine:
 
     def prefetch(self, ids: list[str]):
         """Hovering a song warms its stream URL so clicking it starts right away."""
-        now = time.time()
         for vid in ids[:3]:
-            hit = self.yt._stream_cache.get(vid)
-            ready = hit and hit["expires"] - 300 > now and (hit.get("premium") or not self.yt.wants_premium())
-            if ready or vid in self._prefetching:
+            if self.yt.stream_ready(vid) or vid in self._prefetching:
                 continue
             if self.offline and self.offline.has(vid):
                 continue
@@ -277,12 +274,15 @@ class Engine:
 
     async def remove(self, qids: list[str]):
         cur = self.current
-        removing_current = cur and cur["qid"] in qids
-        self.items = [i for i in self.items if i["qid"] not in qids]
+        gone = set(qids)
+        removing_current = cur and cur["qid"] in gone
+        before = sum(1 for i in self.items[: max(self.index, 0)] if i["qid"] in gone)
+        self.items = [i for i in self.items if i["qid"] not in gone]
         if cur and not removing_current:
             self.index = self._find(cur["qid"])
         elif removing_current:
-            self.index = min(self.index, len(self.items) - 1)
+            # the song that came after the removed one (removed songs before it shift it down)
+            self.index = min(self.index - before, len(self.items) - 1)
             self._queue_changed()
             if self.index >= 0:
                 await self.play_index(self.index, paused=self.paused)
@@ -302,6 +302,27 @@ class Engine:
         self.items.insert(to, item)
         if cur:
             self.index = self._find(cur["qid"])
+        self._queue_changed()
+        await self.sync_next()
+
+    async def insert(self, tracks: list[dict], at: int):
+        """Put songs back at a position (Undo of a queue removal / clear)."""
+        new = [self._new_item(t, **{k: True for k in ("added", "auto") if t.get(k)}) for t in tracks if t and t.get("id")]
+        if not new:
+            return
+        at = max(0, min(int(at), len(self.items)))
+        if self.index >= 0 and at <= self.index:
+            at = self.index + 1       # never in front of the song that's playing
+        self.items[at:at] = new
+        self._queue_changed()
+        await self.sync_next()
+
+    async def shuffle_upcoming(self):
+        up = self.items[self.index + 1:]
+        if len(up) < 2:
+            return
+        random.shuffle(up)
+        self.items = self.items[: self.index + 1] + up
         self._queue_changed()
         await self.sync_next()
 
@@ -384,6 +405,7 @@ class Engine:
 
     async def set_volume(self, v: int):
         self.volume = max(0, min(100, int(v)))
+        self.mpv.volume = self.volume
         await self.mpv.set("volume", self.volume)
         self.settings.data["volume"] = self.volume
         self._dirty = True
@@ -443,6 +465,13 @@ class Engine:
         else:
             self.sleep = None
             self.toast("Sleep timer off")
+        if self._fade_task:            # turned off / changed while it was fading out: stop the fade, volume back
+            self._fade_task.cancel()
+            self._fade_task = None
+            try:
+                await self.mpv.set("volume", self.volume)
+            except Exception:
+                pass
         self.emit()
         await self.sync_next()
 
@@ -502,9 +531,7 @@ class Engine:
             if paused:
                 opts["pause"] = "yes"
             entry = await self.mpv.loadfile(src["url"], "replace", opts)
-            if paused:
-                pass
-            else:
+            if not paused:
                 await self.mpv.set("pause", False)
         except Exception as e:
             log.warning("mpv loadfile failed: %s", e)
@@ -547,7 +574,7 @@ class Engine:
                 pass
         if self.errors_in_row >= 4:
             self.paused = True
-            self.toast("Several songs in a row failed. Check your internet — Nocturne is also updating its YouTube downloader; restart it from the tray in a minute if this keeps happening.", "error")
+            self.toast("Several songs in a row failed. Check your internet — Nocturne is also updating its YouTube downloader: if this keeps happening, quit Nocturne from the tray in a minute and open it again.", "error")
             self.emit()
             return
         nxt = self._next_index()
@@ -758,11 +785,27 @@ class Engine:
         pos = self._live_pos()
         was_playing = not self.paused
         self.loaded = False
-        try:
-            await self.mpv.restart()
-        except Exception as e:
-            log.error("mpv restart failed: %s", e)
+        self.paused = True
+        self.emit()
+        for n, wait in enumerate((0, 2, 5, 15)):
+            await asyncio.sleep(wait)
+            try:
+                await self.mpv.restart()
+                break
+            except Exception as e:
+                log.error("mpv restart %d failed: %s", n + 1, e)
+        else:
+            self.toast("The player stopped working. Quit Nocturne from the tray and open it again.", "error")
             return
+        # a new mpv knows none of the settings: effects, mute and repeat-one go in again
+        self._af_now, self._speed_now, self._pitch_now = None, 1.0, None
+        self.cur_entry, self.entry_map, self._next_qid_loaded = None, {}, None
+        try:
+            await self.mpv.set("mute", self.muted)
+            if self.repeat == "one":
+                await self.mpv.set("loop-file", "inf")
+        except Exception:
+            pass
         if self.current:
             await self.play_index(self.index, start=pos, paused=not was_playing)
 
@@ -841,6 +884,7 @@ class Engine:
             self._save()
 
     async def _fade_out_and_pause(self):
+        me = asyncio.current_task()
         try:
             start = self.volume
             for k in range(20):
@@ -853,7 +897,8 @@ class Engine:
             await self.bg.sleep_fired()
             self.emit()
         finally:
-            self._fade_task = None
+            if self._fade_task is me:
+                self._fade_task = None
 
     # ================================================================ effects: EQ + song versions
     async def _apply_fx(self, t: dict | None):
@@ -993,9 +1038,20 @@ class Engine:
                 tracks.append(t)
         return {**p, "tracks": tracks}
 
-    def delete_version(self, vid: str):
+    def delete_version(self, vid: str) -> dict | None:
+        gone = next((v for v in self.versions if v["vid"] == vid), None)
         self.versions = [v for v in self.versions if v["vid"] != vid]
         self._save_versions()
+        self.emit("versions", {"count": len(self.versions)})
+        return gone          # the UI keeps it for Undo
+
+    def restore_version(self, v: dict):
+        if not (isinstance(v, dict) and v.get("vid") and v.get("track") and fxmod.clean_fx(v.get("fx"))):
+            raise ValueError("Nothing to restore")
+        if not any(x["vid"] == v["vid"] for x in self.versions):
+            self.versions.append(v)
+            self.versions.sort(key=lambda x: -(x.get("created") or 0))
+            self._save_versions()
         self.emit("versions", {"count": len(self.versions)})
 
     def rename_version(self, vid: str, title: str):
@@ -1021,8 +1077,8 @@ class Engine:
     def _save(self, force: bool = False):
         self._dirty = False
         self._last_save = time.time()
-        keep = [{k: v for k, v in i.items() if not k.startswith("_")} for i in self.items[-1500:]]
-        offset = max(0, len(self.items) - 1500)
+        offset = max(0, min(self.index - 300, len(self.items) - 1500))
+        keep = [{k: v for k, v in i.items() if not k.startswith("_")} for i in self.items[offset:offset + 1500]]
         state = {"items": keep, "index": self.index - offset, "pos": round(self._live_pos(), 1),
                  "shuffle": self.shuffle, "repeat": self.repeat, "context": self.context,
                  "played": self.played_ids[-100:]}

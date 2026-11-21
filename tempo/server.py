@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import logging
 import os
 import time
@@ -90,9 +92,8 @@ def make_app(app_ctx) -> web.Application:
             app_ctx.window_queues.add(q)
         try:
             snap = eng.snapshot()
-            import json as _j
             await resp.write(b"retry: 1500\n\n")
-            await resp.write(f"event: state\ndata: {_j.dumps(snap, ensure_ascii=False)}\n\n".encode())
+            await resp.write(f"event: state\ndata: {json.dumps(snap, ensure_ascii=False)}\n\n".encode())
             while True:
                 try:
                     msg = await asyncio.wait_for(q.get(), 15)
@@ -197,6 +198,8 @@ def make_app(app_ctx) -> web.Application:
         elif op == "move": await eng.move(b["qid"], int(b["to"]))
         elif op == "jump": await eng.jump(b["qid"])
         elif op == "clear": await eng.clear_upcoming()
+        elif op == "insert": await eng.insert(b.get("tracks") or [], int(b.get("at") or 0))
+        elif op == "shuffle": await eng.shuffle_upcoming()
         else:
             return web.json_response({"error": "unknown op"}, status=400)
         return ok(eng.queue_view())
@@ -237,7 +240,14 @@ def make_app(app_ctx) -> web.Application:
 
     async def versions_delete(request):
         b = await body(request)
-        eng.delete_version(b.get("vid", ""))
+        return ok({"version": eng.delete_version(b.get("vid", ""))})
+
+    async def versions_restore(request):
+        b = await body(request)
+        try:
+            eng.restore_version(b.get("version"))
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
         return ok()
 
     async def versions_rename(request):
@@ -267,6 +277,7 @@ def make_app(app_ctx) -> web.Application:
     r.add_post("/api/versions/save", versions_save)
     r.add_post("/api/versions/delete", versions_delete)
     r.add_post("/api/versions/rename", versions_rename)
+    r.add_post("/api/versions/restore", versions_restore)
 
     # ---------------- custom background images (Settings -> Appearance)
     async def bg_upload(request):
@@ -499,6 +510,10 @@ def make_app(app_ctx) -> web.Application:
     async def _after_auth():
         eng.yt.reload_auth()
         acct = await blocking(eng.yt.account_info)
+        if acct and acct.get("network"):
+            # no internet right now: the sign-in itself may be fine, so keep it (it used to be deleted)
+            eng.emit()
+            return web.json_response({"error": "Couldn't reach YouTube to check the sign-in. It's saved; check your internet."}, status=503)
         if not acct or not acct.get("name"):
             ytmod.clear_auth()
             eng.yt.reload_auth()
@@ -521,7 +536,10 @@ def make_app(app_ctx) -> web.Application:
         # ask the open window to run the Google sign-in (used by the tray / Claude to retry it)
         msg = b"event: signin\ndata: {}\n\n"
         for q in list(app_ctx.window_queues):
-            q.put_nowait(msg)
+            try:
+                q.put_nowait(msg)
+            except asyncio.QueueFull:
+                pass
         return ok({"sent": len(app_ctx.window_queues)})
 
     r.add_post("/api/auth/youtube/start", auth_start)
@@ -547,9 +565,6 @@ def make_app(app_ctx) -> web.Application:
         url = b.get("url") or ""
         if url.startswith("https://") or url.startswith("http://127.0.0.1"):
             webbrowser.open(url)
-        return ok()
-
-    async def copy_text(request):
         return ok()
 
     r.add_get("/api/settings", settings_get)
@@ -628,8 +643,11 @@ def make_app(app_ctx) -> web.Application:
 
     async def sp_match_link(request):
         b = await body(request)
+        text = b.get("text") or ""
         try:
-            sp.start_link_match(b.get("text") or "")
+            # short links (spotify.link) are fetched: off the event loop, or playback + the window ping stall
+            links = await blocking(spmod.parse_links, text)
+            sp.start_link_match(text, links)
         except RuntimeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return ok(sp.status())
@@ -639,7 +657,7 @@ def make_app(app_ctx) -> web.Application:
 
     async def sp_choose(request):
         b = await body(request)
-        sp.set_choice(b["list"], int(b["index"]), b.get("track"))
+        await blocking(sp.set_choice, b["list"], int(b["index"]), b.get("track"))   # rewrites a big file
         return ok()
 
     async def sp_import(request):
@@ -695,6 +713,7 @@ def make_app(app_ctx) -> web.Application:
 
 
 def _page(title: str, text: str) -> str:
+    title, text = html.escape(title), html.escape(text)
     return f"""<!doctype html><meta charset=utf-8><title>{title}</title>
 <body style="margin:0;height:100vh;display:grid;place-items:center;background:#0b0b0e;color:#eee;font:16px -apple-system,Segoe UI,sans-serif">
 <div style="text-align:center"><div style="font-size:22px;font-weight:600;margin-bottom:8px">{title}</div><div style="color:#999">{text}</div></div>"""

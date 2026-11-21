@@ -1,6 +1,14 @@
 // Equalizer + "make a version" (slowed / reverb / sped up / bass) panels.
 import { get, post } from './api.js';
-import { h, icon, img, modal, store, toast, run, prompt, on, emit } from './ui.js';
+import { h, icon, img, modal, store, toast, run, prompt, emit } from './ui.js';
+
+// pressing E / V / B twice before the first panel had loaded its data opened two stacked panels
+let opening = false;
+const once = (fn) => async (...a) => {
+  if (opening) return;
+  opening = true;
+  try { return await fn(...a); } finally { opening = false; }
+};
 
 let presetsCache = null;
 async function fxPresets() {
@@ -34,7 +42,7 @@ function slider({ label, min, max, step, value, fmt, onInput }) {
 }
 
 // ------------------------------------------------------------------ make a version
-export async function openFx(track, opts = {}) {
+export const openFx = once(async (track, opts = {}) => {
   const globalMode = !!opts.global;          // "effects on every song"
   if (!track && !globalMode) return;
   const presets = await fxPresets();
@@ -140,10 +148,10 @@ export async function openFx(track, opts = {}) {
   });
   refreshDesc();
   return m;
-}
+});
 
 // ------------------------------------------------------------------ equalizer
-export async function openEq() {
+export const openEq = once(async () => {
   const data = await get('/api/eq');
   let eq = { on: false, preset: 'Flat', bands: Array(10).fill(0), preamp: 0, ...(data.eq || {}) };
   let timer = null;
@@ -191,10 +199,10 @@ export async function openEq() {
     bars, pre,
     h('div', { class: 'set-desc' }, 'Applies to everything you play. Double-click a slider to zero it. A limiter keeps boosts from distorting.'));
   modal({ title: 'Equalizer', wide: true, body });
-}
+});
 
 // ------------------------------------------------------------------ background sounds: a mixer of real recordings
-export async function openBg() {
+export const openBg = once(async () => {
   const { state, sounds, presets, max } = await get('/api/bg');
   const byId = Object.fromEntries(sounds.map((s) => [s.id, s]));
   let st = { ...state, mix: { ...state.mix } };
@@ -285,4 +293,4 @@ export async function openBg() {
       tog('Turn off with the sleep timer', 'When the sleep timer ends, the sounds fade out too.', 'stop_with_sleep')),
     h('div', { class: 'set-desc' }, 'Click sounds to layer them. They keep playing while music is paused. Press B to turn them on or off.'));
   modal({ title: 'Background sounds', wide: true, body, actions: [{ label: 'Done', primary: true }] });
-}
+});

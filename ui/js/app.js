@@ -1,12 +1,14 @@
 // App shell: routing, sidebar, search box, shortcuts, live events.
 import { I } from './icons.js';
 import { get, post, cmd, listen, dropCache } from './api.js';
-import { h, icon, btn, img, store, on, emit, go, toast, myPlaylists, errorBox, toggleLike, isMac, closeMenu, refreshPlaying, collectionMenu, prefetchPageOnHover, openFxFor, menu } from './ui.js';
+import { h, icon, btn, img, store, on, emit, go, toast, run, myPlaylists, errorBox, toggleLike, isLiked, isMac, closeMenu, refreshPlaying, collectionMenu, prefetchPageOnHover, openFxFor, menu } from './ui.js';
 import * as V from './views.js';
 import { buildBar, renderState, togglePanel, toggleNowPlaying, restorePanel, livePos } from './player.js';
 import { applyTheme, syncFromEngine } from './theme.js';
 import { initLayout, sideToggleBtn, togglePlaylists, toggleSidebar, toggleWidePanel, toggleMini } from './layout.js';
 import { sideCfg, buildRows, playlistMenuItems, newFolder, headDrop } from './sidelist.js';
+import { dragged, listKeys } from './tracklist.js';
+import { showShortcuts } from './shortcuts.js';
 
 const $ = (s) => document.querySelector(s);
 document.body.classList.add(isMac() ? 'mac' : 'win');
@@ -38,6 +40,7 @@ async function render() {
   try { current.cleanup && current.cleanup(); } catch {}
   current.cleanup = null;
   closeMenu();
+  emit('route');
   if (document.body.classList.contains('np-open')) toggleNowPlaying(false);
   const { name, param, query } = parse();
   const key = location.hash || '#/home';
@@ -48,7 +51,8 @@ async function render() {
   host.replaceChildren(view);
   sc.scrollTop = 0;
   updateNav(name, param);
-  if (name === 'search') $('#search-input').value = query.get('q') || '';
+  // the box shows what this page searched for; on other pages it's empty (an old query used to sit there everywhere)
+  if (document.activeElement !== $('#search-input')) $('#search-input').value = name === 'search' ? query.get('q') || '' : '';
   try {
     const res = await fn(param, view, query);
     if (seq !== renderSeq) { res?.cleanup && res.cleanup(); return; }
@@ -74,7 +78,7 @@ function buildSidebar() {
     h('div', { class: 'brand' }, h('img', { src: '/assets/nocturne-512.png', alt: '' }), h('span', null, 'Nocturne'), sideToggleBtn()),
     h('nav', { class: 'nav' }, nav('home', 'Home', 'home'), nav('explore', 'Explore', 'explore'), nav('library', 'Library', 'library', '#/library/playlists')),
     h('div', { class: 'side-sep' }),
-    h('div', { class: 'side-head' }, h('button', { class: 'side-fold', title: 'Show / hide your playlists', onclick: togglePlaylists }, h('span', null, 'Playlists'), icon('chevDown')), btn('folderPlus', 'New folder', () => sideCfg().then(() => newFolder())), btn('plus', 'New playlist', async () => {
+    sideHead = h('div', { class: 'side-head' }, h('button', { class: 'side-fold', title: 'Show / hide your playlists', onclick: togglePlaylists }, h('span', null, 'Playlists'), icon('chevDown')), btn('folderPlus', 'New folder', () => sideCfg().then(() => newFolder())), btn('plus', 'New playlist', async () => {
       if (!store.state?.auth?.yt) return go('#/settings');
       const { prompt } = await import('./ui.js');
       const name = await prompt('New playlist', 'Playlist name');
@@ -87,8 +91,19 @@ function buildSidebar() {
     h('div', { class: 'side-foot' },
       h('a', { class: 'nav-item', href: '#/library/downloads', dataset: { route: 'downloads' } }, icon('download'), h('span', null, 'Downloads'), h('span', { id: 'dl-badge', class: 'badge-dot' })),
       h('a', { class: 'nav-item', href: '#/settings', dataset: { route: 'settings' } }, icon('settings'), h('span', null, 'Settings'), h('span', { id: 'acct-mini' }))));
+  headDrop(sideHead);
   renderSidePlaylists();
 }
+let sideHead = null;
+
+// songs dragged out of a list (tracklist.js) onto a sidebar playlist
+function songDrop(el, onDrop) {
+  el.addEventListener('dragover', (e) => { if (dragged.tracks) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; el.classList.add('drop'); } });
+  el.addEventListener('dragleave', () => el.classList.remove('drop'));
+  el.addEventListener('drop', (e) => { if (!dragged.tracks) return; e.preventDefault(); el.classList.remove('drop'); onDrop(dragged.tracks); });
+}
+const addTracksTo = (p, tracks) => run(() => post('/api/playlist/add', { playlistId: p.id, title: p.title,
+  tracks: tracks.map((t) => ({ id: t.id, version_id: t.version_id || undefined })) })).then(() => dropCache('/api/playlist/' + p.id)).catch(() => {});
 
 async function renderSidePlaylists() {
   const box = $('#side-pls');
@@ -99,12 +114,14 @@ async function renderSidePlaylists() {
   const pls = await myPlaylists();
   const liked = h('a', { class: 'side-pl', href: '#/playlist/LM', dataset: { id: 'LM' } }, h('div', { class: 'art xs liked-art', html: I.heartFill }), h('span', null, 'Liked music'));
   prefetchPageOnHover(liked, { kind: 'playlist', id: 'LM' });
+  songDrop(liked, (tracks) => { const todo = tracks.filter((t) => !isLiked(t)); todo.forEach((t) => toggleLike(t)); toast(todo.length ? `Liked ${todo.length} song${todo.length === 1 ? '' : 's'}` : 'Already liked'); });
   const mine = h('a', { class: 'side-pl', href: '#/library/versions', dataset: { id: 'versions' } }, h('div', { class: 'art xs versions-art', html: I.wand }), h('span', null, 'My versions'));
   await sideCfg();
   const row = (p) => {
     const a = h('a', { class: 'side-pl', href: `#/playlist/${p.id}`, dataset: { id: p.id }, title: p.title }, img(p.thumb, 'xs'), h('span', null, p.title));
     a.addEventListener('contextmenu', (e) => { e.preventDefault(); collectionMenu(p, e.clientX, e.clientY); });
     prefetchPageOnHover(a, p);
+    if (p.owned !== false) songDrop(a, (tracks) => addTracksTo(p, tracks));
     return a;
   };
   const rows = buildRows(pls.filter((p) => p.id !== 'LM' && p.id !== 'SE'), row, (x, y, items) => menu(x, y, items));
@@ -146,14 +163,18 @@ function buildTop() {
     h('div', { class: 'hist' }, btn('left', 'Back', () => history.back()), btn('right', 'Forward', () => history.forward())),
     box);
   let tm = null, sel = -1, items = [];
-  const show = (list) => {
+  const show = (list, recent = false) => {
     items = list; sel = -1;
-    sugg.replaceChildren(...list.map((s, i) => h('div', { class: 'sugg', onmousedown: (e) => { e.preventDefault(); submit(s); } }, icon('search'), h('span', null, s))));
+    sugg.replaceChildren(...list.map((s) => h('div', { class: 'sugg', onmousedown: (e) => { e.preventDefault(); submit(s); } }, icon(recent ? 'history' : 'search'), h('span', null, s),
+      recent ? h('button', { class: 'sugg-x', title: 'Remove from recent searches', onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); saveRecent(loadRecent().filter((x) => x !== s)); show(loadRecent(), true); } }, icon('x')) : null)),
+      recent && list.length ? h('div', { class: 'sugg-head' }, h('span', null, 'Recent searches'), h('button', { class: 'linkbtn', onmousedown: (e) => { e.preventDefault(); saveRecent([]); show([]); } }, 'Clear')) : null);
+    if (recent && list.length) sugg.prepend(sugg.lastChild);
     sugg.classList.toggle('open', list.length > 0 && document.activeElement === input);
   };
   const submit = (q) => {
     q = (q || '').trim();
     if (!q) return;
+    if (!/^(https?:|spotify:)/.test(q)) saveRecent([q, ...loadRecent().filter((x) => x.toLowerCase() !== q.toLowerCase())].slice(0, 8));
     input.value = q;
     sugg.classList.remove('open');
     input.blur();
@@ -162,7 +183,8 @@ function buildTop() {
   input.addEventListener('input', () => {
     clearTimeout(tm);
     const q = input.value.trim();
-    if (!q || /^https?:\/\//.test(q)) { show([]); return; }
+    if (!q) { show(loadRecent(), true); return; }
+    if (/^https?:\/\//.test(q)) { show([]); return; }
     tm = setTimeout(async () => { try { const r = await get('/api/suggest?q=' + encodeURIComponent(q)); if (input.value.trim() === q) show(r.items || []); } catch {} }, 130);
   });
   input.addEventListener('keydown', (e) => {
@@ -175,9 +197,12 @@ function buildTop() {
     } else if (e.key === 'Escape') { sugg.classList.remove('open'); input.blur(); }
   });
   input.addEventListener('paste', () => setTimeout(() => { if (/^https?:\/\/.*(youtube\.com|youtu\.be|open\.spotify\.com|spotify\.link|spoti\.fi)/.test(input.value.trim()) || /^spotify:(playlist|album|track):/.test(input.value.trim())) submit(input.value); }, 0));
-  input.addEventListener('focus', () => { input.select(); if (items.length) sugg.classList.add('open'); });
+  input.addEventListener('focus', () => { input.select(); if (!input.value.trim()) show(loadRecent(), true); else if (items.length) sugg.classList.add('open'); });
   input.addEventListener('blur', () => setTimeout(() => sugg.classList.remove('open'), 120));
 }
+
+const loadRecent = () => { try { return JSON.parse(localStorage.getItem('tempo.recent') || '[]'); } catch { return []; } };
+const saveRecent = (l) => { try { localStorage.setItem('tempo.recent', JSON.stringify(l)); } catch {} };
 
 // ------------------------------------------------------------------ keyboard
 function typing(e) {
@@ -189,6 +214,7 @@ document.addEventListener('keydown', (e) => {
   if (m && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#search-input').focus(); return; }
   if (typing(e)) return;
   if (document.querySelector('.modal-back')) return;
+  if (listKeys(e)) return;
   const s = store.state;
   const k = e.key;
   if (k === ' ') { e.preventDefault(); cmd('toggle'); }
@@ -211,10 +237,11 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'f' || k === 'F') toggleNowPlaying();
   else if ((k === 'v' || k === 'V') && s?.track) openFxFor(s.track);
   else if (k === 'e' || k === 'E') import('./fxpanel.js').then((m) => m.openEq());
-  else if (k === 'b' || k === 'B') post('/api/bg', { on: !s?.bg?.on }).then(() => toast(s?.bg?.on ? 'Background sounds off' : 'Background sounds on')).catch(() => {});
+  else if (k === 'b' || k === 'B') { const was = !!s?.bg?.on; post('/api/bg', { on: !was }).then(() => toast(was ? 'Background sounds off' : 'Background sounds on')).catch((er) => toast(er.message, 'error')); }
   else if (k === '[') toggleSidebar();
   else if (k === ']') toggleWidePanel();
   else if (k === 'p' || k === 'P') toggleMini();
+  else if (k === '?') showShortcuts();
   else if (k === 'Escape' && document.body.classList.contains('np-open')) toggleNowPlaying(false);
 });
 // mouse back/forward buttons

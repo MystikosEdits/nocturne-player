@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 from . import config
 
@@ -95,13 +96,21 @@ class AppContext:
         log.info("%s engine up on %s:%s", config.NAME, config.HOST, config.PORT)
         self.engine.on_track_change.append(self._tray_title)
         self.engine.on_repeated_failures = lambda: self.loop.run_in_executor(None, update_components, True)
-        self.loop.call_later(120, lambda: self.loop.run_in_executor(None, update_components))
+        self.loop.create_task(self._update_loop())
         while not self._stopping:
             await asyncio.sleep(0.5)
         await self.engine.stop()
         if self.engine.media:
             self.engine.media.close()
         await self._runner.cleanup()
+
+    async def _update_loop(self):
+        # checked every 6 h, not just once after start: the engine can run for weeks from the tray (it updates when
+        # the last update is 4+ days old)
+        await asyncio.sleep(120)
+        while not self._stopping:
+            await self.loop.run_in_executor(None, update_components)
+            await asyncio.sleep(6 * 3600)
 
     def quit(self):
         self._stopping = True
@@ -150,7 +159,8 @@ def update_components(force: bool = False) -> bool:
     UPDATE_STAMP.write_text(str(time.time()))
     pkgs = ["yt-dlp[default]", "yt-dlp-ejs", "ytmusicapi"]
     if config.IS_MAC:
-        uv = os.path.expanduser("~/.local/bin/uv")
+        import shutil
+        uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")   # setup_mac.sh takes whichever uv it finds
         venv_py = str(config.ROOT / ".venv" / "bin" / "python")
         cmd = [uv, "pip", "install", "--python", venv_py, "-U", *pkgs]
     else:
@@ -210,9 +220,10 @@ def launch_window():
         subprocess.Popen([python_gui(), run, "--window"], creationflags=0x08000000 | 0x00000008,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
     elif config.IS_MAC:
-        app = config.ROOT / "Nocturne.app"
-        if app.exists():
-            subprocess.Popen(["open", str(app)])
+        app = next((a for a in (Path.home() / "Applications" / "Nocturne.app", config.ROOT / "Nocturne.app") if a.exists()), None)
+        if app:
+            # -n + --window: without them `open` just pointed at the running engine (same app) and no window came
+            subprocess.Popen(["open", "-n", str(app), "--args", "--window"])
         else:
             subprocess.Popen([sys.executable, run, "--window"], start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

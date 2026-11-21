@@ -5,20 +5,27 @@
 //   drag a playlist         -> onto a folder (into it), onto a pinned one (pin it there), onto "Playlists" (back out)
 //   right-click a folder    -> Rename, Delete (its playlists go back to the list)
 import { get, post } from './api.js';
-import { h, icon, img, emit, prompt, toast } from './ui.js';
+import { h, icon, emit, prompt, toast } from './ui.js';
 
 let cfg = null;
+let loaded = false;       // never write before the saved pins/folders were really read: a failed read used to start
+                          // from an empty set, and the next pin then saved over (= wiped) every folder
 const fresh = () => ({ pinned: [], folders: [] });
 
 export async function sideCfg() {
-  if (!cfg) {
-    try { cfg = { ...fresh(), ...((await get('/api/settings')).settings.sidebar || {}) }; } catch { cfg = fresh(); }
+  if (!loaded) {
+    try { cfg = { ...fresh(), ...((await get('/api/settings')).settings.sidebar || {}) }; loaded = true; }
+    catch { cfg = cfg || fresh(); }
   }
   return cfg;
 }
+// saves go out one after another, so two quick drags can't land in the wrong order (the older one won)
+let chain = Promise.resolve();
 function save() {
-  post('/api/settings', { sidebar: cfg }).catch((e) => toast(e.message, 'error'));
   emit('sidecfg');
+  if (!loaded) { toast('Couldn’t read your sidebar folders, so this change isn’t saved. Try again in a moment.', 'error'); loaded = false; cfg = null; return; }
+  const snap = JSON.parse(JSON.stringify(cfg));
+  chain = chain.then(() => post('/api/settings', { sidebar: snap })).catch((e) => toast(e.message, 'error'));
 }
 const folderOf = (id) => cfg.folders.find((f) => f.items.includes(id));
 const outOfFolders = (id) => cfg.folders.forEach((f) => { f.items = f.items.filter((x) => x !== id); });
@@ -29,21 +36,21 @@ export function pin(id, before) {
   if (i >= 0) cfg.pinned.splice(i, 0, id); else cfg.pinned.push(id);
   save();
 }
+const loose = (id) => { outOfFolders(id); cfg.pinned = cfg.pinned.filter((x) => x !== id); };   // a playlist lives in one place
 export function unpin(id) { cfg.pinned = cfg.pinned.filter((x) => x !== id); save(); }
 export function moveToFolder(id, fid) {
-  outOfFolders(id);
-  cfg.pinned = cfg.pinned.filter((x) => x !== id);     // a playlist lives in one place
+  loose(id);
   const f = cfg.folders.find((x) => x.id === fid);
   if (f) { f.items.push(id); f.open = true; }
   save();
 }
-export function takeOut(id) { outOfFolders(id); cfg.pinned = cfg.pinned.filter((x) => x !== id); save(); }
+export function takeOut(id) { loose(id); save(); }
 export async function newFolder(withId) {
   const name = await prompt('New folder', 'Folder name');
   if (!name) return;
   const f = { id: 'f' + Date.now().toString(36), name: name.trim(), open: true, items: [] };
   cfg.folders.push(f);
-  if (withId) { outOfFolders(withId); cfg.pinned = cfg.pinned.filter((x) => x !== withId); f.items.push(withId); }
+  if (withId) { loose(withId); f.items.push(withId); }
   save();
 }
 
@@ -121,4 +128,3 @@ export function buildRows(pls, row, menuAt) {
 
 /** the "Playlists" header takes a dragged playlist back out of its folder / pin */
 export const headDrop = (el) => dropTarget(el, (id) => takeOut(id));
-export { img };

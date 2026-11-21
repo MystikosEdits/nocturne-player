@@ -19,7 +19,7 @@ class Offline:
         self.queue: list[dict] = []
         self.active: dict | None = None
         self.progress = 0.0
-        self.failed: list[str] = []
+        self._cancelled: set[str] = set()   # removed while downloading: don't put it back when it finishes
         self._worker: asyncio.Task | None = None
         # drop entries whose file vanished
         for vid in list(self.index):
@@ -62,12 +62,16 @@ class Offline:
 
     def remove(self, ids: list[str]):
         for vid in ids:
+            if self.active and self.active["id"] == vid:
+                self._cancelled.add(vid)
             e = self.index.pop(vid, None)
             if e:
                 try:
                     (config.OFFLINE / e["file"]).unlink()
                 except FileNotFoundError:
                     pass
+                except OSError as err:   # Windows: the song is playing from that file right now
+                    log.info("couldn't delete %s now (%s); it's out of Downloads", e["file"], err)
         self.queue = [t for t in self.queue if t["id"] not in ids]
         config.write_json(config.OFFLINE_INDEX, self.index)
         self._emit()
@@ -82,10 +86,17 @@ class Offline:
             self.progress = 0.0
             self._emit()
             try:
-                await self.engine.run_blocking(self._download, t)
+                entry = await self.engine.run_blocking(self._download, t)
+                # the index is only changed here, on the event loop (the download thread used to write it while
+                # remove() changed it: "dict changed size")
+                if t["id"] in self._cancelled:
+                    (config.OFFLINE / entry["file"]).unlink(missing_ok=True)
+                else:
+                    self.index[t["id"]] = entry
+                    config.write_json(config.OFFLINE_INDEX, self.index)
             except Exception as e:
                 log.warning("download failed %s: %s", t["id"], e)
-                self.failed.append(t["id"])
+            self._cancelled.discard(t["id"])
             self.active = None
             self._emit()
         self.engine.toast("Downloads finished")
@@ -97,6 +108,17 @@ class Offline:
         dest = config.OFFLINE / name
         tmp = dest.with_suffix(".part")
         headers = {k: v for k, v in (src.get("headers") or {}).items() if k.lower() in ("user-agent", "accept", "accept-language")}
+        try:
+            self._fetch(src, headers, tmp)
+        except BaseException:
+            tmp.unlink(missing_ok=True)      # a failed download used to leave its .part file behind
+            raise
+        got = tmp.stat().st_size
+        tmp.replace(dest)
+        track = {k: v for k, v in t.items() if k in ("id", "title", "artists", "artist", "album", "dur", "thumb", "explicit", "type")}
+        return {"file": name, "size": got, "added": time.time(), "track": track}
+
+    def _fetch(self, src: dict, headers: dict, tmp: Path):
         total = None
         got = 0
         chunk = 1024 * 1024
@@ -120,7 +142,3 @@ class Offline:
                         self.engine.loop.call_soon_threadsafe(self._emit)
                 if total is None or got >= total:
                     break
-        tmp.replace(dest)
-        track = {k: v for k, v in t.items() if k in ("id", "title", "artists", "artist", "album", "dur", "thumb", "explicit", "type")}
-        self.index[t["id"]] = {"file": name, "size": got, "added": time.time(), "track": track}
-        config.write_json(config.OFFLINE_INDEX, self.index)

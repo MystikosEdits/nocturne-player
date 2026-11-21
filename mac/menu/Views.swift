@@ -15,7 +15,17 @@ final class Controls: ObservableObject {
 
     init(player: Player, link: EngineLink) { self.player = player; self.link = link }
 
-    func toggle() { player.paused.toggle(); link.cmd("toggle") }   // optimistic; the engine confirms
+    func toggle() {
+        // optimistic; the engine confirms. Re-base the clock first: flipping `paused` alone made the bar jump by the
+        // whole paused time (pos + 10 min) until the engine's next state arrived
+        if player.track != nil {
+            let now = Date()
+            player.pos = player.position(at: now)
+            player.stamp = now
+            player.paused.toggle()
+        }
+        link.cmd("toggle")
+    }
     func next() { link.cmd("next") }
     func prev() { link.cmd("prev") }
     func seek(_ t: Double) {
@@ -26,8 +36,11 @@ final class Controls: ObservableObject {
     func like() {
         guard let t = player.track else { return }
         let status = t.like == "LIKE" ? "INDIFFERENT" : "LIKE"
+        let before = t.like
         player.setLike(id: t.id, status: status)
-        link.post("api/like", ["id": t.id, "status": status])
+        link.post("api/like", ["id": t.id, "status": status]) { [weak self] ok in
+            if !ok { self?.player.setLike(id: t.id, status: before) }   // refused (signed out / offline): undo the heart
+        }
     }
 }
 

@@ -1,10 +1,10 @@
 // Bottom player bar, queue + lyrics side panel, and the full Now Playing view.
-import { I } from './icons.js';
 import { get, post, cmd } from './api.js';
 import {
   h, icon, btn, img, store, on, emit, fmtTime, artistLinks, toggleLike, isLiked, trackMenu, menu, run, go, artColor,
-  refreshPlaying, toast, openFxFor,
+  refreshPlaying, toast, openFxFor, prompt, myPlaylists,
 } from './ui.js';
+import { dragged } from './tracklist.js';
 import { onArt } from './theme.js';
 import { miniBtn, panelWideBtn } from './layout.js';
 import { describeFx } from './fxpanel.js';
@@ -94,9 +94,16 @@ function slider(el, onChange, onHover) {
     el.classList.add('drag');
     onChange(frac(e), false);
     const move = (ev) => onChange(frac(ev), false);
-    const up = (ev) => { el.classList.remove('drag'); el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); onChange(frac(ev), true); };
+    const end = (ev, commit) => {
+      el.classList.remove('drag');
+      el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', cancel);
+      if (commit) onChange(frac(ev), true); else { dragging = null; paintProgress(true); }
+    };
+    const up = (ev) => end(ev, true);
+    const cancel = (ev) => end(ev, false);
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', cancel);
   });
   if (onHover) el.addEventListener('pointermove', (e) => onHover(frac(e)));
 }
@@ -230,7 +237,7 @@ function sleepItems() {
     s ? { label: 'Turn off sleep timer', icon: 'x', onClick: () => cmd('sleep', null) } : null,
     s ? '-' : null,
     opt('15 minutes', 15), opt('30 minutes', 30), opt('45 minutes', 45), opt('1 hour', 60), opt('2 hours', 120),
-    opt('End of this song', 'track'),
+    opt('Stop after this song', 'track'),
   ];
 }
 function sleepMenu(e) { menu(e.clientX - 160, e.clientY - 300, sleepItems()); }
@@ -285,12 +292,61 @@ function renderPanel() {
   const tabs = h('div', { class: 'panel-tabs' },
     h('button', { class: `ptab ${panelTab === 'queue' ? 'on' : ''}`, onclick: () => { panelTab = 'queue'; renderPanel(); togglePanelBtns(); } }, 'Up next'),
     h('button', { class: `ptab ${panelTab === 'lyrics' ? 'on' : ''}`, onclick: () => { panelTab = 'lyrics'; renderPanel(); togglePanelBtns(); } }, 'Lyrics'),
+    h('span', { class: 'ptab-gap' }),
+    panelTab === 'queue' ? btn('more', 'Queue options', (e) => queueMenu(e)) : lyricSizeBtns(),
     panelWideBtn(), btn('x', 'Close', () => togglePanel(panelTab)));
   const body = h('div', { class: 'panel-body' });
   p.append(tabs, body);
+  queueDrop(body);
   if (panelTab === 'queue') renderQueue(body);
   else renderLyrics(body);
 }
+// songs dragged out of a list (tracklist.js) onto the queue panel go to the end of "Next in queue"
+function queueDrop(el) {
+  el.addEventListener('dragover', (e) => { if (dragged.tracks && panelTab === 'queue') { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; el.classList.add('drop'); } });
+  el.addEventListener('dragleave', (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove('drop'); });
+  el.addEventListener('drop', (e) => {
+    el.classList.remove('drop');
+    if (!dragged.tracks || panelTab !== 'queue') return;
+    e.preventDefault();
+    run(() => post('/api/queue/add', { tracks: dragged.tracks }));
+  });
+}
+
+function queueMenu(e) {
+  const q = store.queue;
+  const up = q ? (q.items || []).slice(q.index + 1) : [];
+  menu(e.clientX - 200, e.clientY + 8, [
+    { label: 'Save queue as playlist…', icon: 'save', onClick: saveQueue },
+    { label: 'Shuffle what\'s next', icon: 'shuffle', onClick: () => run(() => post('/api/queue/shuffle')) },
+    up.length ? { label: 'Clear what\'s next', icon: 'listX', danger: true, onClick: () => clearQueue() } : null,
+  ]);
+}
+
+async function saveQueue() {
+  if (!store.state?.auth?.yt) return toast('Sign in to YouTube Music to save playlists (Settings)', 'error');
+  const q = store.queue || (await loadQueue());
+  const items = (q.items || []).filter((t) => !t.unavailable);
+  if (!items.length) return toast('The queue is empty');
+  const name = await prompt('Save queue as playlist', 'Playlist name', q.context?.title ? `${q.context.title} (queue)` : 'My queue');
+  if (!name) return;
+  const r = await run(() => post('/api/playlist/create', { title: name, tracks: items.map((t) => ({ id: t.id, version_id: t.version_id || undefined })) }));
+  if (r?.id) { (await import('./api.js')).dropCache('/api/library'); myPlaylists(true); }
+}
+
+// removals from the queue can be undone: the songs go back where they were
+function undoable(label, removed) {
+  toast(label, 'info', { action: 'Undo', onAction: () => run(() => post('/api/queue/insert', { tracks: removed.map(({ t }) => t), at: removed[0].i })) });
+}
+function removeFromQueue(t, i) {
+  run(() => post('/api/queue/remove', { qid: t.qid })).then(() => undoable(`Removed “${t.title}” from the queue`, [{ t, i }])).catch(() => {});
+}
+function clearQueue() {
+  const q = store.queue;
+  const removed = (q?.items || []).map((t, i) => ({ t, i })).slice(q.index + 1);
+  run(() => post('/api/queue/clear')).then(() => removed.length && undoable(`Cleared ${removed.length} song${removed.length === 1 ? '' : 's'} from the queue`, removed)).catch(() => {});
+}
+
 function togglePanelBtns() {
   els.queueBtn.classList.toggle('on', panelTab === 'queue');
   els.lyricsBtn.classList.toggle('on', panelTab === 'lyrics');
@@ -328,18 +384,21 @@ async function renderQueue(body, compact = false) {
   const added = up.filter(({ t }) => t.added && !t.auto);
   const ctx = up.filter(({ t }) => !t.added && !t.auto);
   const auto = up.filter(({ t }) => t.auto);
+  // a 5,000-song playlist on shuffle redrew every row on every song change: draw the first 200 of each group
+  const CAP = 200;
   const group = (label, list, extra) => {
     if (!list.length) return;
     body.append(h('div', { class: 'qlabel' }, h('span', null, label), extra || null));
-    list.forEach(({ t, i }) => body.append(qrow(t, i)));
+    list.slice(0, CAP).forEach(({ t, i }) => body.append(qrow(t, i)));
+    if (list.length > CAP) body.append(h('div', { class: 'muted small pad' }, `+ ${list.length - CAP} more`));
   };
-  const clear = h('button', { class: 'linkbtn', onclick: () => run(() => post('/api/queue/clear')) }, 'Clear');
+  const clear = h('button', { class: 'linkbtn', onclick: () => clearQueue() }, 'Clear');
   group('Next in queue', added, clear);
   group(q.context?.title ? `Next from: ${q.context.title}` : 'Next up', ctx, added.length ? null : clear);
   const ap = h('label', { class: 'mini-switch', title: 'Autoplay similar songs' }, h('input', { type: 'checkbox', checked: store.state?.autoplay, onchange: (e) => cmd('autoplay', e.target.checked) }), h('span'));
   ap.querySelector('input').checked = !!store.state?.autoplay;
   body.append(h('div', { class: 'qlabel auto' }, h('span', null, icon('sparkles'), ' Autoplay'), ap));
-  if (store.state?.autoplay) auto.forEach(({ t, i }) => body.append(qrow(t, i)));
+  if (store.state?.autoplay) auto.slice(0, CAP).forEach(({ t, i }) => body.append(qrow(t, i)));
   else body.append(h('div', { class: 'muted small pad' }, 'Turn on to keep playing similar songs when your queue ends.'));
   body.scrollTop = keepScroll;
 }
@@ -350,9 +409,9 @@ function qrow(t, i, isCur = false) {
     img(t.thumb, 'xs'),
     h('div', { class: 'tt' }, h('div', { class: 'tname' }, t.title), h('div', { class: 'tsub' }, t.artist)),
     h('div', { class: 'qdur' }, fmtTime(t.dur)),
-    isCur ? null : btn('x', 'Remove', () => run(() => post('/api/queue/remove', { qid: t.qid })), 'qx'));
+    isCur ? null : btn('x', 'Remove', () => removeFromQueue(t, i), 'qx'));
   if (!isCur) r.addEventListener('click', () => post('/api/queue/jump', { qid: t.qid }));
-  r.addEventListener('contextmenu', (e) => { e.preventDefault(); trackMenu(t, e.clientX, e.clientY, { extra: isCur ? [] : ['-', { label: 'Remove from queue', icon: 'trash', danger: true, onClick: () => post('/api/queue/remove', { qid: t.qid }) }] }); });
+  r.addEventListener('contextmenu', (e) => { e.preventDefault(); trackMenu(t, e.clientX, e.clientY, { extra: isCur ? [] : ['-', { label: 'Remove from queue', icon: 'trash', danger: true, onClick: () => removeFromQueue(t, i) }] }); });
   r.addEventListener('dragstart', (e) => { dragQid = t.qid; r.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
   r.addEventListener('dragend', () => { dragQid = null; r.classList.remove('dragging'); document.querySelectorAll('.qrow.over').forEach((x) => x.classList.remove('over', 'below')); });
   r.addEventListener('dragover', (e) => {
@@ -380,6 +439,15 @@ function qrow(t, i, isCur = false) {
 
 // ------------------------------------------------------------------ lyrics
 let lyr = { id: null, data: null, loading: false, userScrollAt: 0 };
+let lyrSize = (() => { try { return +localStorage.getItem('tempo.lyrsize') || 1; } catch { return 1; } })();
+function setLyrSize(f) {
+  lyrSize = Math.max(0.7, Math.min(1.6, Math.round(f * 10) / 10));
+  try { localStorage.setItem('tempo.lyrsize', String(lyrSize)); } catch {}
+  document.querySelectorAll('.lyr').forEach((w) => w.style.setProperty('--lyr', lyrSize));
+}
+function lyricSizeBtns() {
+  return h('span', { class: 'lyr-size' }, btn('minus', 'Smaller lyrics', () => setLyrSize(lyrSize - 0.1), 'sm'), btn('textSize', 'Lyrics size: reset', () => setLyrSize(1), 'sm'), btn('plus', 'Bigger lyrics', () => setLyrSize(lyrSize + 0.1), 'sm'));
+}
 async function fetchLyrics(id) {
   if (lyr.id === id && (lyr.data || lyr.loading)) return lyr.data;
   lyr = { id, data: null, loading: true, userScrollAt: 0 };
@@ -403,7 +471,7 @@ async function renderLyrics(body, big = false) {
   if (store.state?.track?.id !== t.id) return;
   body.innerHTML = '';
   if (!data || data.none) { body.append(h('div', { class: 'panel-empty' }, icon('lyrics'), h('div', null, 'No lyrics for this one'))); return; }
-  const wrap = h('div', { class: `lyr ${data.timed ? 'timed' : ''} ${big ? 'big' : ''}` });
+  const wrap = h('div', { class: `lyr ${data.timed ? 'timed' : ''} ${big ? 'big' : ''}`, style: { '--lyr': lyrSize } });
   data.lines.forEach((l) => {
     const line = h('div', { class: `lline ${l.text.trim() ? '' : 'gap'}`, dataset: l.t !== null ? { t: String(l.t) } : {} }, l.text || '♪');
     if (data.timed) line.addEventListener('click', () => cmd('seek', l.t));
@@ -411,7 +479,7 @@ async function renderLyrics(body, big = false) {
   });
   if (data.source) wrap.append(h('div', { class: 'lyr-src' }, data.source));
   body.append(wrap);
-  body.addEventListener('wheel', () => { lyr.userScrollAt = performance.now(); }, { passive: true });
+  if (!body._wheel) { body._wheel = true; body.addEventListener('wheel', () => { lyr.userScrollAt = performance.now(); }, { passive: true }); }
 }
 
 let lastLine = null;
@@ -437,6 +505,7 @@ function syncLyrics() {
 }
 
 function onTrackChanged(t) {
+  emit('track', t);
   if (panelTab === 'lyrics' && $('#panel').classList.contains('open')) renderLyrics($('#panel .panel-body'));
   if ($('#nowplaying')?.classList.contains('open')) renderNowPlaying();
 }
@@ -490,6 +559,7 @@ function renderNowPlaying() {
     btn('sliders', 'Background: album art, blur, darken, see-through', () => toggleNpPop(np), 'np-bgbtn'));
   if (npTab === 'lyrics') renderLyrics(body, true);
   else renderQueue(body, true);
+  paintProgress(true);    // the clock only ticks while playing: opened while paused, it showed 0:00 / 0:00
 }
 
 function renderNowPlayingState() {

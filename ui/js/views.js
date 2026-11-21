@@ -2,10 +2,12 @@
 import { I } from './icons.js';
 import { get, post, cached, dropCache, cmd } from './api.js';
 import {
-  h, icon, btn, pill, img, go, store, on, emit, trackList, shelf, grid, card, empty, skeleton, errorBox, toast, run, modal,
-  prompt, playTracks, playKind, playItem, collectionMenu, artColor, fmtTime, fmtBytes, artistLinks, myPlaylists, mod, isMac,
+  h, icon, btn, pill, img, go, store, on, shelf, grid, empty, skeleton, errorBox, toast, run, modal,
+  prompt, playTracks, playKind, playItem, artColor, fmtTime, fmtBytes, artistLinks, myPlaylists, isMac,
   copyLink, menu, addToPlaylistMenu, needSignIn,
 } from './ui.js';
+import { trackList } from './tracklist.js';
+import { shortcutRows } from './shortcuts.js';
 
 const signedIn = () => !!store.state?.auth?.yt;
 
@@ -144,6 +146,12 @@ function collHeader({ thumb, type, title, meta, desc, round }) {
 }
 
 function actionRow(...kids) { return h('div', { class: 'actions' }, ...kids); }
+// a song list with its find / sort / jump tools at the right end of the page's action row
+function listWithTools(row, tracks, opts) {
+  const list = trackList(tracks, { ...opts, tools: tracks.length > 1 });
+  if (list.tools) row.append(list.tools);
+  return list;
+}
 const bigPlay = (onClick) => h('button', { class: 'bigplay', title: 'Play', onclick: onClick }, icon('play'));
 
 export async function playlist(id, el) {
@@ -152,12 +160,16 @@ export async function playlist(id, el) {
   el.innerHTML = '';
   el.classList.add('tinted');
   tint(el, p.thumb);
-  const total = p.tracks.reduce((a, t) => a + (t.dur || 0), 0);
-  const meta = [p.author, p.year, `${p.tracks.length} songs`, total ? fmtLong(total) : p.duration].filter(Boolean).join(' • ');
-  el.append(collHeader({ thumb: p.thumb, type: id === 'LM' ? 'Your likes' : 'Playlist', title: p.title, meta, desc: p.desc }));
+  const metaText = (ts) => {
+    const total = ts.reduce((a, t) => a + (t.dur || 0), 0);
+    return [p.author, p.year, `${ts.length} song${ts.length === 1 ? '' : 's'}`, total ? fmtLong(total) : p.duration].filter(Boolean).join(' • ');
+  };
+  const head = collHeader({ thumb: p.thumb, type: id === 'LM' ? 'Your likes' : 'Playlist', title: p.title, meta: metaText(p.tracks), desc: p.desc });
+  const metaEl = head.querySelector('.coll-meta');
+  el.append(head);
   const ctx = { type: 'playlist', id, title: p.title };
   const dlAll = () => run(() => post('/api/downloads/add', { tracks: p.tracks }));
-  el.append(actionRow(
+  const acts = actionRow(
     bigPlay(() => playTracks(p.tracks, 0, ctx, false)),
     btn('shuffle', 'Shuffle', () => playTracks(p.tracks, Math.floor(Math.random() * p.tracks.length), ctx, true), 'lg'),
     btn('radio', 'Radio', () => run(() => post('/api/play', { kind: 'radio', playlistId: id.startsWith('RD') ? id : 'RDAMPL' + id, title: `${p.title} radio` })), 'lg'),
@@ -167,9 +179,15 @@ export async function playlist(id, el) {
       { label: 'Copy link', icon: 'link', onClick: () => copyLink({ id }, 'playlist') },
       p.owned && id !== 'LM' ? '-' : null,
       p.owned && id !== 'LM' ? { label: 'Delete playlist', icon: 'trash', danger: true, onClick: () => confirmDelete(id, p.title) } : null,
-    ]), 'lg')));
-  if (!p.tracks.length) el.append(empty('music', 'This playlist is empty', p.owned ? 'Right-click any song and choose “Add to playlist”.' : ''));
-  else el.append(trackList(p.tracks, { context: ctx, playlistId: id, owned: p.owned, onChanged: () => location.reload() }));
+    ]), 'lg'));
+  el.append(acts);
+  if (!p.tracks.length) el.append(empty('music', 'This playlist is empty', p.owned ? 'Right-click any song and choose “Add to playlist”, or drag songs onto it in the sidebar.' : ''));
+  else {
+    // a copy: removing a song with Undo edits this list, never the cached one
+    const tracks = p.tracks.slice();
+    el.append(listWithTools(acts, tracks, { context: ctx, playlistId: id, owned: p.owned,
+      onChanged: (now) => { metaEl.textContent = metaText(now); } }));
+  }
   return { title: p.title };
 }
 
@@ -209,7 +227,7 @@ export async function album(id, el) {
     saveBtn.classList.toggle('on', saved);
     dropCache('/api/library/albums');
   }, `lg ${saved ? 'on' : ''}`);
-  el.append(actionRow(
+  const acts = actionRow(
     bigPlay(() => playTracks(a.tracks, 0, ctx, false)),
     btn('shuffle', 'Shuffle', () => playTracks(a.tracks, 0, ctx, true), 'lg'),
     saveBtn,
@@ -218,8 +236,8 @@ export async function album(id, el) {
       { label: 'Add to queue', icon: 'addQueue', onClick: () => run(() => post('/api/queue/add', { tracks: a.tracks }), 'Added to queue') },
       signedIn() ? { label: 'Add to playlist', icon: 'plus', sub: () => addToPlaylistMenu(a.tracks) } : null,
       { label: 'Copy link', icon: 'link', onClick: () => copyLink({ id: a.id }, 'album') },
-    ]), 'lg')));
-  el.append(trackList(a.tracks, { context: ctx, showArt: false, showAlbum: false }));
+    ]), 'lg'));
+  el.append(acts, listWithTools(acts, a.tracks, { context: ctx, showArt: false, showAlbum: false }));
   if (a.versions?.length) el.append(shelf({ title: 'Other versions', type: 'cards', items: a.versions }));
   return { title: a.title };
 }
@@ -286,7 +304,8 @@ export async function library(tab, el) {
   body.innerHTML = '';
   const items = data.items || [];
   if (tab === 'history') {
-    body.append(items.length ? trackList(items, { context: { type: 'history', title: 'History' } }) : empty('history', 'No history yet'));
+    if (!items.length) body.append(empty('history', 'No history yet', 'Songs you play show up here (and teach your recommendations).'));
+    else { const acts = actionRow(); body.append(acts, listWithTools(acts, items, { context: { type: 'history', title: 'History' } })); }
   } else if (tab === 'playlists') {
     const create = h('div', { class: 'card newpl', onclick: async () => {
       const name = await prompt('New playlist', 'Playlist name');
@@ -312,10 +331,10 @@ export async function versions(_, el, __, embedded = false) {
   const render = async () => {
     const { items } = await get('/api/versions');
     body.innerHTML = '';
-    body.append(h('div', { class: 'note' }, 'Songs you’ve slowed, reverbed, sped up or bass-boosted. Right-click any song → ', h('b', null, 'Slowed / reverb / sped up…'), ' to make one. They play with their effects anywhere: queue, shuffle, downloads.'));
-    if (!items.length) { body.append(empty('wand', 'No versions yet', 'Right-click any song and choose “Slowed / reverb / sped up…”.')); return; }
-    body.append(actionRow(bigPlay(() => playKind('versions', 'versions')), btn('shuffle', 'Shuffle', () => playKind('versions', 'versions', { shuffle: true }), 'lg')));
-    body.append(trackList(items, { onPlay: (i) => playKind('versions', 'versions', { index: i }) }));
+    // the how-to only when there's nothing yet (a banner above the list was read once and scrolled past forever)
+    if (!items.length) { body.append(empty('wand', 'No versions yet', 'Right-click any song → “Slowed / reverb / sped up…” (or press V) to make one. Versions play with their effects anywhere: queue, shuffle, playlists, downloads.')); return; }
+    const acts = actionRow(bigPlay(() => playKind('versions', 'versions')), btn('shuffle', 'Shuffle', () => playKind('versions', 'versions', { shuffle: true }), 'lg'));
+    body.append(acts, listWithTools(acts, items, { context: { type: 'versions', id: 'versions', title: 'My versions' }, onPlay: (i) => playKind('versions', 'versions', { index: i }) }));
   };
   await render();
   const off = on('versions-changed', render);
@@ -327,19 +346,31 @@ export async function downloads(_, el, __, embedded = false) {
   if (!embedded) el.append(pageHead('Downloads'));
   const body = h('div');
   el.append(body);
+  const progress = h('div');
+  const paintProgress = (st) => {
+    progress.replaceChildren(...(st.active ? [h('div', { class: 'dl-active' }, icon('download'), h('span', null, `Downloading “${st.active.title}”`),
+      h('div', { class: 'bar' }, h('i', { style: { width: Math.round((st.active.progress || 0) * 100) + '%' } })),
+      st.queued ? h('span', { class: 'muted' }, `+${st.queued} waiting`) : null)] : []));
+  };
+  let shown = '';
   const render = async () => {
     const { items } = await get('/api/library/offline');
     const st = await get('/api/downloads');
+    shown = String(st.count);
     body.innerHTML = '';
-    body.append(h('div', { class: 'note' }, `${items.length} song${items.length === 1 ? '' : 's'} saved for offline • ${fmtBytes(st.bytes)}. Downloaded songs play without internet and start instantly.`));
-    if (st.active) body.append(h('div', { class: 'dl-active' }, icon('download'), h('span', null, `Downloading “${st.active.title}”`), h('div', { class: 'bar' }, h('i', { style: { width: Math.round((st.active.progress || 0) * 100) + '%' } })), st.queued ? h('span', { class: 'muted' }, `+${st.queued} waiting`) : null));
-    if (!items.length) { body.append(empty('download', 'No downloads yet', 'Right-click a song, or use the download button on any playlist or album.')); return; }
-    body.append(actionRow(bigPlay(() => playKind('offline', 'offline')), btn('shuffle', 'Shuffle', () => playKind('offline', 'offline', { shuffle: true }), 'lg')));
-    body.append(trackList(items, { onPlay: (i) => playKind('offline', 'offline', { index: i }), extraMenu: (t) => [{ label: 'Remove download', icon: 'trash', danger: true, onClick: () => run(() => post('/api/downloads/remove', { ids: [t.id] })).then(render) }] }));
+    body.append(progress);
+    paintProgress(st);
+    if (!items.length) { body.append(empty('download', 'No downloads yet', 'Right-click a song, or use the download button on any playlist or album. Downloaded songs play without internet and start instantly.')); return; }
+    const acts = actionRow(bigPlay(() => playKind('offline', 'offline')), btn('shuffle', 'Shuffle', () => playKind('offline', 'offline', { shuffle: true }), 'lg'),
+      h('span', { class: 'muted small' }, `${items.length} song${items.length === 1 ? '' : 's'} • ${fmtBytes(st.bytes)} on this computer`));
+    body.append(acts, listWithTools(acts, items, { context: { type: 'offline', id: 'offline', title: 'Downloads' }, onPlay: (i) => playKind('offline', 'offline', { index: i }), extraMenu: (t) => [{ label: 'Remove download', icon: 'trash', danger: true, onClick: () => run(() => post('/api/downloads/remove', { ids: [t.id] })) }] }));
   };
   await render();
   let tm = null;
-  const off = on('downloads', () => { clearTimeout(tm); tm = setTimeout(render, 600); });
+  const off = on('downloads', (d) => {
+    paintProgress(d);
+    if (String(d.count) !== shown) { clearTimeout(tm); tm = setTimeout(render, 400); }   // the list itself changed
+  });
   return { title: 'Downloads', cleanup: off };
 }
 
@@ -433,16 +464,6 @@ function selectEl(opts, value, onChange) {
   const s = h('select', { class: 'select' }, ...opts.map(([v, l]) => { const o = h('option', { value: v }, l); if (v === value) o.selected = true; return o; }));
   s.addEventListener('change', () => onChange(s.value));
   return s;
-}
-
-function shortcutRows() {
-  const m = mod();
-  const rows = [
-    ['Play / pause', 'Space'], ['Next / previous song', `${m} →  /  ${m} ←`], ['Seek 10 s', '→  /  ←'], ['Volume', `${m} ↑  /  ${m} ↓`],
-    ['Search', `${m} K  or  /`], ['Like current song', 'L'], ['Shuffle / repeat', 'S  /  R'], ['Queue / lyrics', 'Q  /  Y'], ['Now playing', 'F'], ['Mute', 'M'],
-    ['Slowed / reverb / sped up', 'V'], ['Equalizer', 'E'], ['Background sounds on / off', 'B'], ['Collapse / expand the sidebar', '['], ['Wider queue / lyrics panel', ']'], ['Mini player', 'P'],
-  ];
-  return rows.map(([a, k]) => h('div', { class: 'set-row slim' }, h('div', { class: 'set-title' }, a), h('div', { class: 'keys' }, k)));
 }
 
 let signingIn = false;
@@ -664,10 +685,11 @@ export async function importView(_, el, query) {
         render();
       } }, 'Find songs on YouTube Music')));
   };
-  const poll = () => { let n = 0; const t = setInterval(async () => { n++; const st = await get('/api/spotify').catch(() => null); if (st?.connected || n > 120) { clearInterval(t); render(); } }, 1500); };
+  let pollT = null;   // waiting for the browser sign-in; stopped when you leave the page (it used to run on for 3 min)
+  const poll = () => { clearInterval(pollT); let n = 0; pollT = setInterval(async () => { n++; const st = await get('/api/spotify').catch(() => null); if (st?.connected || n > 120) { clearInterval(pollT); if (body.isConnected) render(); } }, 1500); };
   await render();
   const off = on('spotify', () => render());
-  return { title: 'Import from Spotify', cleanup: () => { off(); clearTimeout(timer); } };
+  return { title: 'Import from Spotify', cleanup: () => { off(); clearTimeout(timer); clearInterval(pollT); } };
 }
 
 async function reviewStep(rerender) {

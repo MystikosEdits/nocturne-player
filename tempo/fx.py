@@ -107,7 +107,9 @@ def _makeup_db(fx: dict) -> float:
 
 def _escape_path(p: str) -> str:
     # inside a filter graph a Windows drive colon must be escaped and the path quoted
-    return "'" + p.replace("\\", "/").replace(":", "\\:").replace("'", "") + "'"
+    # (an apostrophe, e.g. a user folder "O'Brien", closes the quote, gets escaped, and reopens it: it used to be
+    # dropped, so the reverb file wasn't found and every effect silently fell away)
+    return "'" + p.replace("\\", "/").replace(":", "\\:").replace("'", "'\\''") + "'"
 
 
 def build_af(eq: dict | None, fx: dict | None, normalize: bool, ir_path: str, rubberband: bool = False) -> str:

@@ -18,6 +18,7 @@ export function rbRGB(h, s, l) {
 // An effect's rainbow is a band across the screen that drifts sideways (a lap in 20 s): colour by position, not per particle.
 const rbSweep = (x, w, clk) => ((((x / Math.max(1, w)) * 360 + clk * 18) % 360) + 360) % 360;
 
+const miniOn = () => document.body.classList.contains('mini');
 const zoomOf = () => parseFloat(document.documentElement.style.zoom || '1') || 1;
 function fit(c, w, h) { const z = zoomOf(); c.style.width = `${w / z}px`; c.style.height = `${h / z}px`; }
 function canvas(id) {
@@ -175,10 +176,11 @@ const SNOW = (() => {
     last = t;
     draw(dt);
   }
-  const start = () => { if (STILL || raf || !opt.on || document.hidden) return; last = 0; raf = requestAnimationFrame(frame); };
+  const start = () => { if (STILL || raf || !opt.on || document.hidden || miniOn()) return; last = 0; raf = requestAnimationFrame(frame); };
   const stop = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
   addEventListener('resize', () => { if (opt.on) size(); });
   document.addEventListener('visibilitychange', () => (document.hidden ? stop() : start()));
+  addEventListener('tempo-mini', () => (miniOn() ? stop() : start()));
   return {
     set(o) {
       const was = opt.depth, sig = [opt.amount, opt.size, opt.speed, opt.sway, opt.bright].join(','), wasOn = opt.on;
@@ -291,17 +293,22 @@ const EMBERS = (() => {
     }
     ctx.globalAlpha = 1;
   }
-  const start = () => { if (STILL || raf || !opt.on || document.hidden) return; last = 0; raf = requestAnimationFrame(frame); };
+  const start = () => { if (STILL || raf || !opt.on || document.hidden || miniOn()) return; last = 0; raf = requestAnimationFrame(frame); };
   const stop = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
   addEventListener('resize', () => { if (opt.on && c) size(); });
   document.addEventListener('visibilitychange', () => (document.hidden ? stop() : start()));
+  addEventListener('tempo-mini', () => (miniOn() ? stop() : start()));
   return {
     set(o) {
+      const was = { amount: opt.amount, size: opt.size };
       Object.assign(opt, o);
       if (!opt.on) { stop(); if (c) { c.remove(); c = null; ctx = null; } return; }
-      if (!c) { c = canvas('fx-embers'); ctx = c.getContext('2d'); }
+      const fresh = !c;
+      if (fresh) { c = canvas('fx-embers'); ctx = c.getContext('2d'); }
       buildSprite();
-      size();
+      // re-spawn only when the field itself changes: every theme change (any slider, every song with the album-art
+      // background) used to reset all the sparks = the embers visibly jumped
+      if (fresh || opt.amount !== was.amount || opt.size !== was.size) size();
       start();
     },
   };
@@ -376,10 +383,11 @@ const STARS = (() => {
       ctx.beginPath(); ctx.arc(t2.x, t2.y, 1.7, 0, 6.283); ctx.fill();
     }
   }
-  const start = () => { if (STILL || raf || !opt.on || document.hidden) return; last = 0; nextMet = 2; raf = requestAnimationFrame(frame); };
+  const start = () => { if (STILL || raf || !opt.on || document.hidden || miniOn()) return; last = 0; nextMet = 2; raf = requestAnimationFrame(frame); };
   const stop = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
   addEventListener('resize', () => { if (opt.on && c) size(); });
   document.addEventListener('visibilitychange', () => (document.hidden ? stop() : start()));
+  addEventListener('tempo-mini', () => (miniOn() ? stop() : start()));
   return {
     set(o) {
       const sig = [opt.amount, opt.size, opt.speed, opt.twinkle, opt.bright].join(',');
