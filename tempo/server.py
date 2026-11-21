@@ -678,12 +678,18 @@ def make_app(app_ctx) -> web.Application:
             asyncio.get_running_loop().call_later(0.2, app_ctx.quit)
         return ok()
 
+    async def window_open(request):
+        # show the open window, or start one (the macOS menu-bar panel's "Open Nocturne")
+        app_ctx.open_window()
+        return ok()
+
     async def quit_(request):
         asyncio.get_running_loop().call_later(0.2, app_ctx.quit)
         return ok()
 
     r.add_post("/api/window/show", window_show)
     r.add_post("/api/window/closed", window_closed)
+    r.add_post("/api/window/open", window_open)
     r.add_post("/api/quit", quit_)
     return app
 

@@ -17,6 +17,8 @@ about 65 MB with the window closed, and the music keeps going when you close the
 - **Looks**: 25 themes, any accent colour (or rainbow), album-art / gradient / image backgrounds, glass panels,
   snow / starfield / embers effects, size, corners, fonts.
 - **Layout**: collapsible sidebar, playlist pins and folders, resizable panels, a mini player (`P`).
+- **Mac menu bar**: click Nocturne's icon at the top of the screen for the current song (cover, progress, play/pause,
+  skip, like); right-click for the menu. "Player on desktop" puts a widget-sized player on your desktop.
 - **Spotify import**: paste a link to any public Spotify playlist, album or song (anyone's, no Spotify login) into the
   search box or Settings → Import from Spotify, or bring over your own playlists and liked songs.
 
@@ -36,6 +38,8 @@ about 65 MB with the window closed, and the music keeps going when you close the
 2. In Terminal: `cd ~/Nocturne && bash setup_mac.sh`
 3. Open **Nocturne** from `~/Applications` or Spotlight. If macOS warns that it can't check the app, right-click it →
    **Open** once.
+4. The menu-bar panel is compiled on your Mac and needs Apple's free Command Line Tools (`xcode-select --install`,
+   then run `bash setup_mac.sh` again). Without them Nocturne still works, with a plain menu-bar icon.
 
 ## First run
 

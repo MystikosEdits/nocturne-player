@@ -41,6 +41,7 @@ class AppContext:
         self._show_pending = False
         self.loop: asyncio.AbstractEventLoop | None = None
         self.tray = None
+        self.menu_helper = None           # macOS: the native menu-bar helper process (mac/menu)
         self._runner = None
         self._stopping = False
 
@@ -104,6 +105,7 @@ class AppContext:
 
     def quit(self):
         self._stopping = True
+        stop_menu_helper(self)
         if self.tray:
             try:
                 self.tray.stop()
@@ -256,6 +258,72 @@ def _mac_login_item(on: bool):
             pass
 
 
+# ---------------------------------------------------------------- macOS menu-bar helper
+def menu_helper_path():
+    """The native helper built by mac/build.sh: inside Nocturne.app (install_mac.sh puts it there), else
+    the build folder of this checkout. None = not built (no Command Line Tools) -> plain pystray icon."""
+    exe = "NocturneMenu.app/Contents/MacOS/NocturneMenu"
+    for p in (config.ROOT / "Nocturne.app" / "Contents" / "Helpers" / exe, config.ROOT / "mac" / "build" / exe):
+        if p.exists():
+            return p
+    return None
+
+
+def start_menu_helper(ctx: AppContext) -> bool:
+    """macOS: the menu-bar icon is a small Swift app (click = now-playing panel, right-click = menu,
+    optional desktop player). It quits by itself when this engine process ends."""
+    if not config.IS_MAC or os.environ.get("TEMPO_NO_MENU_HELPER"):
+        return False
+    exe = menu_helper_path()
+    if not exe:
+        return False
+    app_path = config.ROOT / "Nocturne.app"
+    args = [str(exe), "--port", str(config.PORT), "--engine-pid", str(os.getpid())]
+    if app_path.exists():
+        args += ["--app", str(app_path)]
+    try:
+        err = open(config.LOGS / "menu.log", "ab")
+        ctx.menu_helper = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=err, stderr=err, close_fds=True)
+        log.info("menu-bar helper started (pid %s)", ctx.menu_helper.pid)
+        return True
+    except Exception as e:
+        log.warning("menu-bar helper didn't start: %s", e)
+        ctx.menu_helper = None
+        return False
+
+
+def stop_menu_helper(ctx: AppContext):
+    p, ctx.menu_helper = ctx.menu_helper, None
+    if p and p.poll() is None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+
+def keep_menu_helper(ctx: AppContext, icon):
+    """Runs in pystray's setup thread: the pystray icon stays hidden while the helper lives; a helper
+    that keeps dying (3 times in 2 minutes) hands the menu bar back to the plain pystray icon."""
+    deaths = []
+    while not ctx._stopping:
+        p = ctx.menu_helper
+        if p is None:
+            break
+        rc = p.wait()
+        if ctx._stopping or ctx.menu_helper is not p:
+            return
+        now = time.time()
+        deaths = [t for t in deaths if now - t < 120] + [now]
+        log.warning("menu-bar helper exited (rc %s)", rc)
+        if len(deaths) >= 3 or not start_menu_helper(ctx):
+            break
+        time.sleep(1)
+    if not ctx._stopping:
+        log.warning("menu-bar helper gave up: showing the plain menu-bar icon")
+        ctx.menu_helper = None
+        icon.visible = True
+
+
 # ---------------------------------------------------------------- tray icon
 def make_tray(ctx: AppContext):
     import pystray
@@ -305,6 +373,7 @@ def main(silent: bool = False):
             log.exception("engine crashed")
         finally:
             ctx._stopping = True
+            stop_menu_helper(ctx)
             if ctx.tray:
                 try:
                     ctx.tray.stop()
@@ -319,13 +388,20 @@ def main(silent: bool = False):
         log.warning("no tray icon: %s", e)
         ctx.tray = None
     if ctx.tray:
-        if config.IS_MAC:
-            ctx.tray.run()  # needs the main thread on macOS; also drives Now Playing
+        if config.IS_MAC and start_menu_helper(ctx):
+            # the native helper owns the menu bar; pystray's (hidden) icon still runs the main run loop,
+            # which macOS Now Playing needs
+            try:
+                ctx.tray._status_item.button().setHidden_(True)   # pystray makes its item up front
+            except Exception:
+                pass
+            ctx.tray.run(setup=lambda icon: keep_menu_helper(ctx, icon))
         else:
-            ctx.tray.run()
+            ctx.tray.run()  # on macOS this needs the main thread; it also drives Now Playing
     else:
         while t.is_alive():
             t.join(1)
     ctx._stopping = True
+    stop_menu_helper(ctx)
     t.join(5)
     os._exit(0)

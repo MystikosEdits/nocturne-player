@@ -5,3 +5,4 @@ bin/
 *.f32
 .DS_Store
 _jobs/
+mac/build/

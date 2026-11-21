@@ -4,7 +4,7 @@
 # (Dock name/icon, Now Playing) instead of "Python".
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"   # the folder this copy lives in (Grant's Mac: ~/Tempo)
-APP="$HOME/Applications/Nocturne.app"
+APP="${NOCTURNE_APP:-$HOME/Applications/Nocturne.app}"   # override only for test builds
 rm -rf "$HOME/Applications/Tempo.app" "$ROOT/Tempo.app"   # the app before it was renamed
 VENV="$ROOT/.venv"
 if [ ! -x "$VENV/bin/python" ]; then
@@ -50,8 +50,26 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
 </dict></plist>
 EOF
+# the menu-bar helper: icon at the top of the screen with the now-playing panel + the desktop player (mac/menu).
+# Needs Apple's Command Line Tools to compile; without it Nocturne keeps its plain menu-bar icon.
+LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+HELPER=""
+if bash "$ROOT/mac/build.sh" "$ROOT/mac/build"; then
+  mkdir -p "$APP/Contents/Helpers"
+  cp -R "$ROOT/mac/build/NocturneMenu.app" "$APP/Contents/Helpers/"
+  HELPER="$APP/Contents/Helpers/NocturneMenu.app"
+else
+  echo "(menu-bar panel not built: Nocturne uses its plain menu-bar icon)"
+fi
 # a link from the code folder too, so the engine can reopen the window via `open`
 ln -sfn "$APP" "$ROOT/Nocturne.app"
 touch "$APP"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
+"$LSR" -f "$APP" >/dev/null 2>&1 || true
+if [ -n "$HELPER" ]; then
+  "$LSR" -f "$HELPER" >/dev/null 2>&1 || true     # its nocturne-menu:// links (widget buttons)
+  if [ -d "$HELPER/Contents/PlugIns/NowPlaying.appex" ]; then
+    pluginkit -a "$HELPER/Contents/PlugIns/NowPlaying.appex" 2>/dev/null || true
+    echo "widget registered (Notification Center / desktop: Edit Widgets -> Nocturne)"
+  fi
+fi
 echo "built $APP ($PYVER)"

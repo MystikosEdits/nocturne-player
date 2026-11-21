@@ -39,7 +39,11 @@ if [ ! -x "$ROOT/bin/mpv.app/Contents/MacOS/mpv" ]; then
   rm -rf "$TMP"
 fi
 
-# 4. ~/Applications/Nocturne.app
+# 4. ~/Applications/Nocturne.app (+ the menu-bar panel, compiled here if Apple's Command Line Tools are installed)
+if ! xcode-select -p >/dev/null 2>&1; then
+  echo "Note: for the menu-bar panel (current song when you click Nocturne's icon) install Apple's free Command Line"
+  echo "Tools once with:  xcode-select --install   then run this setup again. Nocturne works without it."
+fi
 bash "$ROOT/tools/install_mac.sh"
 echo
 echo "Done. Open Nocturne from ~/Applications (or Spotlight: Nocturne)."
