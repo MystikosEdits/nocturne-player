@@ -2,7 +2,8 @@
 
 Everything becomes ONE mpv `af` string (a libavfilter graph), so EQ + song effects + volume levelling
 stack in a fixed order and always end in a limiter (no clipping). Speed is mpv's `speed` property:
-with `keep_pitch` off it plays like a turntable (slowed = deeper, sped up = higher), on = same pitch.
+with `keep_pitch` off it plays like a turntable (slowed = deeper, sped up = higher), on = same pitch
+(Rubber Band when mpv has it, see build_af; else mpv's own scaletempo2).
 """
 from __future__ import annotations
 
@@ -109,10 +110,24 @@ def _escape_path(p: str) -> str:
     return "'" + p.replace("\\", "/").replace(":", "\\:").replace("'", "") + "'"
 
 
-def build_af(eq: dict | None, fx: dict | None, normalize: bool, ir_path: str) -> str:
-    """The full mpv `af` value ('' = no filters at all)."""
-    pre = _eq_chain(eq)
+def build_af(eq: dict | None, fx: dict | None, normalize: bool, ir_path: str, rubberband: bool = False) -> str:
+    """The full mpv `af` value ('' = no filters at all).
+
+    rubberband=True (mpv has librubberband): a "keep pitch" speed change goes through mpv's `rubberband` filter
+    (R3 "finer" engine, channels together = its defaults) instead of the scaletempo2 mpv inserts by itself.
+    scaletempo2 splices the waveform, which warbles dense mixes: on a steady 8-note chord its notes wobbled
+    0.9-1.4 dB and drifted 3 cents at 0.8x/0.65x, rubberband 0.0 (tools/pitch_synth_test.py, Nov 20).
+    With a rubberband filter in the chain mpv sends it the speed and drops its own speed stage EVEN with pitch
+    correction off, so it's only added for keep_pitch (turntable mode must stay a resample)."""
     fx = clean_fx(fx) or {}
+    chain = _build_chain(eq, fx, normalize, ir_path)
+    if rubberband and fx.get("keep_pitch") and fx.get("speed", 1.0) != 1.0:
+        return "rubberband" + ("," + chain if chain else "")
+    return chain
+
+
+def _build_chain(eq: dict | None, fx: dict, normalize: bool, ir_path: str) -> str:
+    pre = _eq_chain(eq)
     if fx.get("bass"):
         pre.append(f"bass=g={fx['bass']}:f=110:w=0.6")
     pre += _muffle_filters(fx)

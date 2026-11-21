@@ -17,7 +17,8 @@ about 65 MB with the window closed, and the music keeps going when you close the
 - **Looks**: 25 themes, any accent colour (or rainbow), album-art / gradient / image backgrounds, glass panels,
   snow / starfield / embers effects, size, corners, fonts.
 - **Layout**: collapsible sidebar, playlist pins and folders, resizable panels, a mini player (`P`).
-- **Spotify import**: copies your Spotify playlists and liked songs into YouTube Music.
+- **Spotify import**: paste a link to any public Spotify playlist, album or song (anyone's, no Spotify login) into the
+  search box or Settings → Import from Spotify, or bring over your own playlists and liked songs.
 
 ## Install
 
@@ -41,7 +42,9 @@ about 65 MB with the window closed, and the music keeps going when you close the
 - **Sign in** (Settings → Sign in with Google) to get your own library, likes, history and recommendations.
   With YouTube Music Premium, songs stream at 256 kbps; without signing in it still plays at about 130 kbps.
   If Google blocks the sign-in window, use the "paste your sign-in" link under the button.
-- **Spotify import** (optional): Settings → Import from Spotify. You'll need your own free Spotify app key:
+- **Spotify import** (optional): paste a Spotify link into the search box — that needs nothing else. Spotify only shows
+  the first 100 songs of a playlist that way; for all of them, open it in the Spotify app, click a song, press Ctrl+A then
+  Ctrl+C, and paste. To bring over your own liked songs / private playlists you need your own free Spotify app key:
   developer.spotify.com/dashboard → Create app → Redirect URI `http://127.0.0.1:8737/spotify/callback`, tick
   **Web API** → copy the **Client ID** into Nocturne.
 

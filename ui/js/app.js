@@ -138,7 +138,7 @@ function renderAccount() {
 
 // ------------------------------------------------------------------ top bar + search
 function buildTop() {
-  const input = h('input', { id: 'search-input', class: 'search-input', placeholder: 'Search songs, artists, albums — or paste a YouTube link', autocomplete: 'off', spellcheck: 'false' });
+  const input = h('input', { id: 'search-input', class: 'search-input', placeholder: 'Search songs, artists, albums — or paste a YouTube or Spotify link', autocomplete: 'off', spellcheck: 'false' });
   const sugg = h('div', { class: 'suggest' });
   const box = h('div', { class: 'search' }, icon('search', 'search-ico'), input, h('span', { class: 'kbd' }, isMac() ? '⌘K' : 'Ctrl K'), sugg);
   const top = $('#top');
@@ -174,7 +174,7 @@ function buildTop() {
       sugg.querySelectorAll('.sugg').forEach((s, i) => s.classList.toggle('on', i === sel));
     } else if (e.key === 'Escape') { sugg.classList.remove('open'); input.blur(); }
   });
-  input.addEventListener('paste', () => setTimeout(() => { if (/^https?:\/\/.*(youtube\.com|youtu\.be)/.test(input.value.trim())) submit(input.value); }, 0));
+  input.addEventListener('paste', () => setTimeout(() => { if (/^https?:\/\/.*(youtube\.com|youtu\.be|open\.spotify\.com|spotify\.link|spoti\.fi)/.test(input.value.trim()) || /^spotify:(playlist|album|track):/.test(input.value.trim())) submit(input.value); }, 0));
   input.addEventListener('focus', () => { input.select(); if (items.length) sugg.classList.add('open'); });
   input.addEventListener('blur', () => setTimeout(() => sugg.classList.remove('open'), 120));
 }

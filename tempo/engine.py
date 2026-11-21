@@ -71,6 +71,7 @@ class Engine:
         self._af_now: str | None = None
         self._speed_now = 1.0
         self._pitch_now: bool | None = None
+        self._rubberband = True      # mpv's rubberband filter for keep-pitch; off after mpv refuses it once
         self.versions: list[dict] = config.read_json(config.VERSIONS_FILE, []) or []
         # {playlistId: {setVideoId: version vid}}: a My version added to a YouTube playlist is stored there as its
         # original song (YouTube can't hold effects); this remembers which ENTRY is the version, so Nocturne shows and
@@ -862,20 +863,26 @@ class Engine:
         speed = f.get("speed", 1.0)
         keep_pitch = bool(f.get("keep_pitch")) if f else True
         af = fxmod.build_af(self.settings.get("eq"), f, bool(self.settings.get("normalize")),
-                            str(config.ASSETS / "reverb_ir.wav"))
+                            str(config.ASSETS / "reverb_ir.wav"), rubberband=self._rubberband)
         try:
             if keep_pitch != self._pitch_now:
                 await self.mpv.set("audio-pitch-correction", keep_pitch)
                 self._pitch_now = keep_pitch
+            # filters before speed: with rubberband in the chain mpv never inserts scaletempo2 first
+            if af != self._af_now:
+                await self.mpv.set("af", af)
+                self._af_now = af
             if abs(speed - self._speed_now) > 0.0005:
                 self.pos = self._live_pos()          # bank the time played at the old speed
                 self.pos_ts = time.time()
                 await self.mpv.set("speed", speed)
                 self._speed_now = speed
-            if af != self._af_now:
-                await self.mpv.set("af", af)
-                self._af_now = af
         except Exception as e:
+            if af.startswith("rubberband") and self._rubberband:
+                # this mpv has no librubberband (e.g. the official msvc Windows build): use scaletempo2
+                log.info("mpv has no rubberband filter (%s), keep-pitch uses scaletempo2", e)
+                self._rubberband = False
+                return await self._apply_fx(t)
             log.warning("applying effects failed (%s): %s", af[:120], e)
             if af:
                 try:   # never leave the player silent because of a bad filter

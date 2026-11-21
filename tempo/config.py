@@ -49,6 +49,8 @@ OFFLINE_INDEX = OFFLINE / "index.json"
 
 
 def mpv_path() -> Path:
+    if os.environ.get("TEMPO_MPV"):      # tests: try another mpv build without touching bin/
+        return Path(os.environ["TEMPO_MPV"])
     if IS_WIN:
         return BIN / "mpv" / "mpv.exe"
     if IS_MAC:

@@ -34,6 +34,7 @@ class Spotify:
         self._state = None
         self.job: dict | None = None
         self.results = config.read_json(config.CACHE / "spotify_match.json", None)
+        self._links: dict = {}  # (kind, id) -> (time, public read): preview + match read Spotify once
 
     # ---------------- auth
     def save(self):
@@ -173,18 +174,66 @@ class Spotify:
         return {k: j.get(k) for k in ("phase", "done", "total", "message", "error", "finished", "created")}
 
     def start_match(self, playlist_ids: list[str], names: dict):
+        """Your own Spotify playlists / liked songs (needs Connect)."""
+        sources = [(pid, (lambda pid=pid: {"name": names.get(pid) or pid, "rows": self.playlist_tracks(pid)}),
+                    names.get(pid, pid)) for pid in playlist_ids]
+        self._start(sources, "Reading Spotify…")
+
+    def start_link_match(self, text: str):
+        """Any public Spotify playlist / album / song links (anyone's), no Spotify sign-in needed."""
+        links = parse_links(text)
+        if not links:
+            raise RuntimeError("That doesn't look like a Spotify link")
+        sources = []
+        for kind, sid in links:
+            if kind in ("playlist", "album"):
+                sources.append((f"sp:{kind}:{sid}", (lambda kind=kind, sid=sid: self.read_link(kind, sid)), f"the {kind}"))
+        songs = [sid for kind, sid in links if kind == "track"]
+        if len(songs) == 1:
+            sources.append((f"sp:track:{songs[0]}", (lambda: self.read_link("track", songs[0])), "the song"))
+        elif songs:
+            sources.append((f"sp:tracks:{songs[0]}:{len(songs)}", (lambda: read_tracks(songs, self.job)), f"{len(songs)} songs"))
+        self._start(sources, "Reading the Spotify link…")
+
+    def read_link(self, kind: str, sid: str) -> dict:
+        hit = self._links.get((kind, sid))
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+        d = read_public(kind, sid)
+        self._links[(kind, sid)] = (time.time(), d)
+        return d
+
+    def link_preview(self, text: str) -> dict:
+        """What a pasted link points at (name, cover, song count); for a single song also its YouTube match."""
+        links = parse_links(text)
+        if not links:
+            raise RuntimeError("That doesn't look like a Spotify link")
+        if len(links) > 1:
+            return {"kind": "many", "count": len(links), "songs": sum(k == "track" for k, _ in links),
+                    "lists": sum(k != "track" for k, _ in links)}
+        kind, sid = links[0]
+        d = self.read_link(kind, sid)
+        out = {k: d.get(k) for k in ("kind", "id", "name", "owner", "image", "total", "url")}
+        out["count"] = len(d["rows"])
+        if kind == "track" and d["rows"]:
+            out["src"] = d["rows"][0]
+            out["match"] = self.match_one(d["rows"][0])
+        return out
+
+    def _start(self, sources, message):
         if self.job and not self.job.get("finished"):
             raise RuntimeError("An import is already running")
-        self.job = {"phase": "reading", "done": 0, "total": 0, "message": "Reading Spotify…", "finished": False}
-        self.engine.loop.run_in_executor(None, self._match_job, playlist_ids, names)
+        self.job = {"phase": "reading", "done": 0, "total": 0, "message": message, "finished": False}
+        self.engine.loop.run_in_executor(None, self._match_job, sources)
 
-    def _match_job(self, playlist_ids, names):
+    def _match_job(self, sources):
         try:
             lists = []
-            for pid in playlist_ids:
-                self.job["message"] = f"Reading {names.get(pid, pid)}…"
-                rows = self.playlist_tracks(pid)
-                lists.append({"id": pid, "name": names.get(pid) or pid, "rows": rows})
+            for lid, reader, label in sources:
+                self.job["message"] = f"Reading {label}…"
+                d = reader()
+                lists.append({"id": lid, "name": d.get("name") or label, "rows": d["rows"],
+                              "total": d.get("total"), "url": d.get("url")})
             uniq = {}
             for l in lists:
                 for r in l["rows"]:
@@ -214,7 +263,8 @@ class Spotify:
                 for r in l["rows"]:
                     key = r["sid"] or (r["name"] + "|" + ",".join(r["artists"]))
                     items.append({"src": r, "match": cache.get(key)})
-                out_lists.append({"id": l["id"], "name": l["name"], "items": items})
+                out_lists.append({"id": l["id"], "name": l["name"], "items": items, "total": l.get("total"),
+                                  "url": l.get("url")})
             counts = {"good": 0, "unsure": 0, "missing": 0}
             for l in out_lists:
                 for it in l["items"]:
@@ -255,15 +305,15 @@ class Spotify:
         config.write_json(config.CACHE / "spotify_match.json", self.results)
 
     # ---------------- writing to YouTube Music
-    def start_import(self, list_ids: list[str], include_unsure: bool):
+    def start_import(self, list_ids: list[str], include_unsure: bool, names: dict | None = None):
         if not self.engine.yt.authed:
             raise RuntimeError("Connect YouTube Music first")
         if self.job and not self.job.get("finished"):
             raise RuntimeError("An import is already running")
         self.job = {"phase": "importing", "done": 0, "total": 0, "message": "Writing to YouTube Music…", "finished": False}
-        self.engine.loop.run_in_executor(None, self._import_job, list_ids, include_unsure)
+        self.engine.loop.run_in_executor(None, self._import_job, list_ids, include_unsure, names or {})
 
-    def _import_job(self, list_ids, include_unsure):
+    def _import_job(self, list_ids, include_unsure, names):
         yt = self.engine.yt
         try:
             todo = [l for l in self.results["lists"] if l["id"] in list_ids]
@@ -288,12 +338,13 @@ class Spotify:
                         time.sleep(0.15)
                     made.append({"name": "Liked songs", "count": len(ids)})
                 else:
-                    self.job["message"] = f"Creating “{l['name']}”…"
-                    pid = yt.create_playlist(l["name"], None, "Imported from Spotify")
+                    name = (names.get(l["id"]) or "").strip()[:150] or l["name"]
+                    self.job["message"] = f"Creating “{name}”…"
+                    pid = yt.create_playlist(name, None, "Imported from Spotify")
                     for k in range(0, len(ids), 50):
                         yt.add_to_playlist(pid, ids[k:k + 50])
                         self.job["done"] += min(50, len(ids) - k)
-                    made.append({"name": l["name"], "count": len(ids), "id": pid})
+                    made.append({"name": name, "count": len(ids), "id": pid})
                 self.job["done"] = min(self.job["total"], self.job["done"] + (len(l["items"]) - len(ids)))
             yt.invalidate("lib:")
             self.job.update(phase="imported", finished=True, message="Done", made=made)
@@ -301,6 +352,150 @@ class Spotify:
             log.exception("import failed")
             self.job.update(phase="error", finished=True, error=str(e)[:300])
         self.engine.loop.call_soon_threadsafe(lambda: self.engine.emit("spotify", self.status()))
+
+
+# ---------------- public links (anyone's playlist, no Spotify sign-in)
+# Since Spotify's Feb 2026 API change the Web API only lists items of playlists YOU own or collaborate on.
+# The public embed page (open.spotify.com/embed/<kind>/<id>) carries the list in its __NEXT_DATA__ JSON:
+# title, artists, duration for the FIRST 100 songs (no paging; measured Nov 20). The normal public page
+# (plain user agent) says the real size in <meta name="music:song_count">, so bigger playlists get a
+# "first 100 of N" note. For all of them: paste the songs' own links (Spotify desktop: Ctrl+A, Ctrl+C),
+# each is read from its track embed.
+_EMBED_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+_LINK = re.compile(r"(playlist|album|track)[/:]([A-Za-z0-9]{22})(?=$|[^A-Za-z0-9]|https?:|spotify:)")
+_SHORT = re.compile(r"https?://(?:spotify\.link|spoti\.fi)/[A-Za-z0-9_-]+")
+_NEXT = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
+
+
+def is_link(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(re.search(r"(open\.spotify\.com/|spotify:(playlist|album|track):|spotify\.link/|spoti\.fi/)", t))
+
+
+def _fetch(url: str, ua: str = _EMBED_UA, timeout: float = 20) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": ua, "Accept-Language": "en"})
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 2:
+                time.sleep(int(e.headers.get("Retry-After") or 2) + 0.5)
+                continue
+            if e.code == 404:
+                raise RuntimeError("Spotify couldn't find that — check the link")
+            raise RuntimeError(f"Spotify said {e.code}")
+    raise RuntimeError("Spotify kept rate-limiting, try again in a minute")
+
+
+def parse_links(text: str) -> list[tuple[str, str]]:
+    """Every Spotify playlist/album/track in the text, in order, no repeats.
+    Takes open.spotify.com links (?si=, /intl-xx/, /embed/, old /user/x/playlist/), spotify:kind:id URIs,
+    and spotify.link / spoti.fi short links (followed)."""
+    text = text or ""
+    if not is_link(text):
+        return []
+    found = _LINK.findall(_SHORT.sub(" ", text))
+    for short in _SHORT.findall(text)[:5]:
+        try:
+            found.extend(_resolve_short(short))
+        except Exception as e:
+            log.info("short link %s: %s", short, e)
+    out, seen = [], set()
+    for kind, sid in found:
+        if (kind, sid) not in seen:
+            seen.add((kind, sid))
+            out.append((kind, sid))
+    return out
+
+
+def _resolve_short(url: str) -> list[tuple[str, str]]:
+    """spotify.link / spoti.fi -> the one thing it points at (redirect target, else the page's og:url)."""
+    req = urllib.request.Request(url, headers={"User-Agent": _EMBED_UA})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        hit = _LINK.findall(r.geturl())
+        if hit:
+            return hit[:1]
+        body = r.read(300_000).decode("utf-8", "replace")
+    for pat in (r'property="og:url" content="([^"]+)"', r'(https://open\.spotify\.com/[^"\'\s<>]+)'):
+        m = re.search(pat, body)
+        if m and _LINK.findall(m.group(1)):
+            return _LINK.findall(m.group(1))[:1]
+    return []
+
+
+def _embed(kind: str, sid: str) -> dict:
+    html = _fetch(f"https://open.spotify.com/embed/{kind}/{sid}")
+    m = _NEXT.search(html)
+    ent = None
+    if m:
+        try:
+            ent = json.loads(m.group(1))["props"]["pageProps"]["state"]["data"]["entity"]
+        except (KeyError, TypeError, ValueError):
+            ent = None
+    if not ent:
+        raise RuntimeError(f"Spotify didn't share that {kind} — it may be private or deleted")
+    return ent
+
+
+def _artists(sub: str) -> list[str]:
+    # embed track subtitles join artists with ",<nbsp>" (names themselves can hold ", ")
+    return [a.strip() for a in (sub or "").split(",\xa0") if a.strip()]
+
+
+def read_public(kind: str, sid: str) -> dict:
+    ent = _embed(kind, sid)
+    url = f"https://open.spotify.com/{kind}/{sid}"
+    imgs = ((ent.get("coverArt") or {}).get("sources") or []) or ((ent.get("visualIdentity") or {}).get("image") or [])
+    image = imgs[-1].get("url") if imgs else None
+    if kind == "track":
+        row = {"sid": sid, "name": ent.get("name") or ent.get("title") or "",
+               "artists": [a.get("name") for a in ent.get("artists") or [] if a.get("name")],
+               "album": "", "ms": ent.get("duration") or 0}
+        return {"kind": kind, "id": sid, "name": row["name"], "owner": ", ".join(row["artists"]), "image": image,
+                "rows": [row], "total": 1, "url": url}
+    rows = []
+    for t in ent.get("trackList") or []:
+        if (t.get("entityType") or "track") != "track":
+            continue  # podcast episodes
+        uri = t.get("uri") or ""
+        rows.append({"sid": uri.rsplit(":", 1)[-1] if uri.startswith("spotify:track:") else None,
+                     "name": t.get("title") or "", "artists": _artists(t.get("subtitle")),
+                     "album": ent.get("name") if kind == "album" else "", "ms": t.get("duration") or 0})
+    total = len(rows)
+    if kind == "playlist" and len(ent.get("trackList") or []) >= 100:
+        try:  # the embed stops at 100: the public page says how many there really are
+            page = _fetch(url, ua="Mozilla/5.0", timeout=15)
+            m = re.search(r'<meta name="music:song_count" content="(\d+)"', page)
+            if m:
+                total = max(total, int(m.group(1)))
+        except Exception as e:
+            log.info("song count for %s: %s", sid, e)
+    return {"kind": kind, "id": sid, "name": ent.get("name") or ent.get("title") or "Spotify " + kind,
+            "owner": ent.get("subtitle") or "", "image": image, "rows": rows, "total": total, "url": url}
+
+
+def read_tracks(ids: list[str], job: dict | None = None) -> dict:
+    """A pasted batch of song links (e.g. Ctrl+A, Ctrl+C in Spotify desktop) -> one list, in order."""
+    ids = ids[:2000]
+    if job is not None:
+        job.update(total=len(ids), done=0)
+
+    def one(sid):
+        try:
+            return read_public("track", sid)["rows"][0]
+        except Exception as e:
+            log.info("track %s: %s", sid, e)
+            return None
+        finally:
+            if job is not None:
+                job["done"] = job.get("done", 0) + 1
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        rows = [r for r in ex.map(one, ids) if r]
+    if not rows:
+        raise RuntimeError("Couldn't read any of those Spotify songs")
+    return {"name": "Songs from Spotify", "rows": rows, "total": len(ids)}
 
 
 # ---------------- scoring
@@ -333,6 +528,10 @@ def score(r: dict, c: dict) -> float:
         artist = 1.0 if inter else max(difflib.SequenceMatcher(None, " ".join(sorted(sa)), " ".join(sorted(ca))).ratio() - 0.2, 0)
         if not inter and any(a in norm(c["title"]) for a in sa):
             artist = 0.85
+        # "Bob Marley & The Wailers" vs "Bob Marley", "Prince" vs "Prince & The Revolution"
+        if not inter and any(len(x) >= 4 and len(y) >= 4 and (f" {x} " in f" {y} " or f" {y} " in f" {x} ")
+                             for x in sa for y in ca):
+            artist = max(artist, 0.95)
     else:
         artist = 0.5
     dur = 0.5

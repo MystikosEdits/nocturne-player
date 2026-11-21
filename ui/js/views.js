@@ -78,13 +78,14 @@ export async function search(_, el, query) {
     class: `chip ${k === f ? 'on' : ''}`, onclick: () => go(`#/search?q=${encodeURIComponent(q)}${k ? '&filter=' + k : ''}`),
   }, k === 'youtube' ? icon('youtube') : null, label)));
   el.append(chips);
-  if (!q) { el.append(empty('search', 'Search for anything', 'Songs, artists, albums, playlists — or paste a YouTube link.')); return { title: 'Search' }; }
+  if (!q) { el.append(empty('search', 'Search for anything', 'Songs, artists, albums, playlists — or paste a YouTube or Spotify link.')); return { title: 'Search' }; }
   const body = h('div');
   el.append(body);
   body.append(skeleton(f && f !== 'albums' && f !== 'artists' && f !== 'playlists' ? 'list' : 'shelves'));
   const data = await cached(`/api/search?q=${encodeURIComponent(q)}${f ? '&filter=' + f : ''}`, 5 * 60000);
   body.innerHTML = '';
   if (data.link) { handleLink(data.link); return { title: 'Search' }; }
+  if (data.spotify) { await spotifySearch(body, data.spotify); return { title: 'Spotify link' }; }
   if (data.tracks) {
     if (!data.tracks.length) body.append(empty('search', `No results for “${q}”`, 'Try different words.'));
     else body.append(trackList(data.tracks, { context: { type: 'search', title: `“${q}”` }, showAlbum: f === 'songs', showViews: f !== 'songs', badgeVideos: true }));
@@ -487,22 +488,127 @@ export function pasteSignIn() {
 }
 
 // ------------------------------------------------------------------ Spotify import
-export async function importView(_, el) {
-  el.append(pageHead('Import from Spotify', 'Copies your Spotify playlists and liked songs into your YouTube Music account. Nothing is written until you press Import.'));
+// Two ways in, one matcher/review/import: (a) a pasted link to ANY public playlist/album/song (no Spotify
+// sign-in; read from Spotify's public embed, first 100 songs), (b) your own Spotify library (Connect).
+const SP_KIND = { playlist: 'Playlist', album: 'Album', track: 'Song' };
+const selAll = () => (isMac() ? '⌘A then ⌘C' : 'Ctrl+A then Ctrl+C');
+
+function moreThan100(total, count) {
+  return h('div', { class: 'note sp-note' },
+    `Spotify only shows the first ${count} of ${total} songs without signing in. To bring all ${total}: open it in the Spotify app, click any song, press ${selAll()}, and paste here — Nocturne reads the song links.`);
+}
+
+// what a pasted link points at; `actions` = buttons under it
+export function spotifyPreview(p, actions = []) {
+  if (p.kind === 'many') {
+    const bits = [p.lists ? `${p.lists} playlist${p.lists > 1 ? 's' : ''}/album${p.lists > 1 ? 's' : ''}` : null, p.songs ? `${p.songs} song${p.songs > 1 ? 's' : ''}` : null].filter(Boolean);
+    return h('div', { class: 'sp-preview' }, h('div', { class: 'art md liked-art', html: I.link }),
+      h('div', { class: 'tt' }, h('div', { class: 'sp-pname' }, `${p.count} Spotify links`), h('div', { class: 'tsub' }, bits.join(' + '),
+        p.songs > 1 ? ' — the songs go into one playlist' : '')), actions.length ? h('div', { class: 'sp-pact' }, ...actions) : null);
+  }
+  const sub = [SP_KIND[p.kind] || p.kind, p.owner ? (p.kind === 'playlist' ? 'by ' + p.owner : p.owner) : null,
+    p.kind !== 'track' ? (p.total > p.count ? `${p.total} songs` : `${p.count} songs`) : null].filter(Boolean).join(' • ');
+  const wrap = h('div', null, h('div', { class: 'sp-preview' }, p.image ? img(p.image, 'md') : h('div', { class: 'art md liked-art', html: I.music }),
+    h('div', { class: 'tt' }, h('div', { class: 'sp-pname' }, p.name), h('div', { class: 'tsub' }, sub)),
+    actions.length ? h('div', { class: 'sp-pact' }, ...actions) : null));
+  if (p.total > p.count) wrap.append(moreThan100(p.total, p.count));
+  if (p.kind === 'track') {
+    const m = p.match || {};
+    const opts = [m.track || m.best, ...(m.alts || [])].filter(Boolean);
+    if (!opts.length) wrap.append(h('div', { class: 'muted small sp-gap' }, 'Couldn’t find this song on YouTube Music.'));
+    else {
+      wrap.append(h('div', { class: 'label sp-gap' }, m.status === 'good' ? 'On YouTube Music' : 'Closest on YouTube Music'),
+        trackList(opts.slice(0, 4), { header: false, showAlbum: false, context: { type: 'search', title: p.name } }));
+    }
+  }
+  return wrap;
+}
+
+function linkCard(state, rerender) {
+  const step = h('div', { class: 'step' }, h('div', { class: 'step-num' }, icon('link')));
+  const b = h('div', { class: 'step-body' }, h('div', { class: 'step-title' }, 'Paste a Spotify link'),
+    h('div', { class: 'muted small' }, 'Any public playlist, album or song — someone else’s too. No Spotify sign-in needed.'));
+  step.append(b);
+  const ta = h('textarea', { class: 'input sp-link', rows: 2, spellcheck: 'false', placeholder: 'https://open.spotify.com/playlist/…' });
+  ta.value = state.text || '';
+  const prev = h('div', { class: 'sp-prev' });
+  const go_ = h('button', { class: 'btn primary', onclick: async () => {
+    const text = ta.value.trim();
+    if (!text) return toast('Paste a Spotify link first', 'error');
+    await run(() => post('/api/spotify/match_link', { text }));
+    state.scroll = true;
+    rerender();
+  } }, 'Find songs on YouTube Music');
+  let tm = null, seq = 0;
+  const show = async () => {
+    const text = ta.value.trim();
+    state.text = ta.value;
+    if (!text) { prev.replaceChildren(); state.preview = null; return; }
+    if (state.preview && state.preview.text === text) { draw(state.preview.p); return; }
+    const n = ++seq;
+    prev.replaceChildren(skeleton('list'));
+    try {
+      const p = await get('/api/spotify/link?text=' + encodeURIComponent(text));
+      if (n !== seq) return;
+      state.preview = { text, p };
+      draw(p);
+    } catch (e) { if (n === seq) prev.replaceChildren(h('div', { class: 'muted small sp-gap' }, e.message)); }
+  };
+  const draw = (p) => {
+    prev.replaceChildren(spotifyPreview(p));
+    go_.textContent = p.kind === 'track' ? 'Add it to a new playlist' : 'Find songs on YouTube Music';
+  };
+  ta.addEventListener('paste', () => setTimeout(show, 0));
+  ta.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(show, 450); });
+  b.append(ta, prev, h('div', { class: 'row-inline' }, go_));
+  if (ta.value.trim()) show();
+  return step;
+}
+
+export async function importView(_, el, query) {
+  el.append(pageHead('Import from Spotify', 'Copies Spotify playlists, albums and liked songs into your YouTube Music account — yours or anyone’s. Nothing is written until you press Import.'));
   const body = h('div', { class: 'import' });
   el.append(body);
   let timer = null;
+  const linkState = { text: query?.get('link') || '', preview: null, scroll: false };
   const render = async () => {
     clearTimeout(timer);
     const st = await get('/api/spotify');
     body.innerHTML = '';
     if (!signedIn()) body.append(signInCard('Imports go into your YouTube Music account, so connect it first.'));
+    const job = st.job;
+    if (job && !job.finished) {
+      const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+      body.append(h('div', { class: 'step' }, h('div', { class: 'step-num' }, '…'), h('div', { class: 'step-body' },
+        h('div', { class: 'step-title' }, job.message || 'Working…'), h('div', { class: 'bar big' }, h('i', { style: { width: pct + '%' } })),
+        h('div', { class: 'muted small' }, job.total ? `${job.done} of ${job.total}` : ''))));
+      linkState.scroll = true;
+      timer = setTimeout(render, 900);
+      return;
+    }
+    if (job && job.phase === 'error') body.append(h('div', { class: 'callout error' }, job.error));
+    if (job && job.phase === 'imported') {
+      const j = await get('/api/spotify/job');
+      body.append(h('div', { class: 'callout ok' }, h('div', { class: 'callout-ico', html: I.check }), h('div', { class: 'callout-text' },
+        h('div', { class: 'callout-title' }, 'Imported to YouTube Music'),
+        h('div', null, (j.job?.made || []).map((m) => `${m.name}: ${m.count} songs`).join(' • ')))));
+      dropCache('/api/library'); myPlaylists(true);
+    }
+    body.append(linkCard(linkState, render));
+    // a fresh match goes right under the link box, where the user is looking
+    if (st.has_results) {
+      const rv = await reviewStep(render);
+      body.append(rv);
+      if (linkState.scroll && job?.phase === 'matched') { linkState.scroll = false; requestAnimationFrame(() => rv.scrollIntoView({ behavior: 'smooth', block: 'start' })); }
+    }
+    body.append(h('div', { class: 'sp-or' }, h('span', null, 'Or bring over your own Spotify library')));
     // step 1: connect
     const step1 = h('div', { class: `step ${st.connected ? 'done' : ''}` }, h('div', { class: 'step-num' }, st.connected ? icon('check') : '1'));
     const s1 = h('div', { class: 'step-body' }, h('div', { class: 'step-title' }, st.connected ? `Spotify connected${st.user ? ' — ' + st.user : ''}` : 'Connect Spotify'));
     if (!st.connected) {
       const cid = h('input', { class: 'input', placeholder: 'Client ID (32 letters and numbers)' });
-      s1.append(h('ol', { class: 'steps' },
+      s1.append(h('div', { class: 'muted small' }, 'Only needed for your liked songs and private playlists.'),
+        h('ol', { class: 'steps' },
         h('li', null, 'Open ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); openExternal('https://developer.spotify.com/dashboard'); } }, 'developer.spotify.com/dashboard'), ' and log in (Premium is required by Spotify).'),
         h('li', null, 'Create app → any name → ', h('b', null, 'Web API'), ', and add this Redirect URI: ',
           h('code', { class: 'copyable', title: 'Click to copy', onclick: () => { navigator.clipboard?.writeText(st.redirect); toast('Copied'); } }, st.redirect)),
@@ -521,23 +627,6 @@ export async function importView(_, el) {
     body.append(step1);
     if (!st.connected) return;
 
-    const job = st.job;
-    if (job && !job.finished) {
-      const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
-      body.append(h('div', { class: 'step' }, h('div', { class: 'step-num' }, '…'), h('div', { class: 'step-body' },
-        h('div', { class: 'step-title' }, job.message || 'Working…'), h('div', { class: 'bar big' }, h('i', { style: { width: pct + '%' } })),
-        h('div', { class: 'muted small' }, job.total ? `${job.done} of ${job.total}` : ''))));
-      timer = setTimeout(render, 900);
-      return;
-    }
-    if (job && job.phase === 'error') body.append(h('div', { class: 'callout error' }, job.error));
-    if (job && job.phase === 'imported') {
-      const j = await get('/api/spotify/job');
-      body.append(h('div', { class: 'callout ok' }, h('div', { class: 'callout-ico', html: I.check }), h('div', { class: 'callout-text' },
-        h('div', { class: 'callout-title' }, 'Imported to YouTube Music'),
-        h('div', null, (j.job?.made || []).map((m) => `${m.name}: ${m.count} songs`).join(' • ')))));
-      dropCache('/api/library'); myPlaylists(true);
-    }
     // step 2: pick playlists
     const step2 = h('div', { class: 'step' }, h('div', { class: 'step-num' }, '2'));
     const s2 = h('div', { class: 'step-body' }, h('div', { class: 'step-title' }, 'Choose what to bring over'));
@@ -555,7 +644,7 @@ export async function importView(_, el) {
       cb.checked = ok && l.id === 'liked';
       cb.disabled = !ok;
       checks.set(l.id, { cb, name: l.name });
-      pl.append(h('label', { class: `sp-item ${ok ? '' : 'dim'}`, title: ok ? '' : 'Spotify only shares playlists you made or collaborate on' },
+      pl.append(h('label', { class: `sp-item ${ok ? '' : 'dim'}`, title: ok ? '' : 'Spotify only shares playlists you made here — paste its link in the box above instead' },
         cb, l.image ? img(l.image, 'sm') : h('div', { class: 'art sm liked-art', html: I.heartFill }),
         h('div', { class: 'tt' }, h('div', { class: 'tname' }, l.name), h('div', { class: 'tsub' }, [l.owner, l.count != null ? `${l.count} songs` : null].filter(Boolean).join(' • ')))));
     }
@@ -566,9 +655,9 @@ export async function importView(_, el) {
         if (!ids.length) return toast('Pick at least one', 'error');
         const names = Object.fromEntries([...checks].map(([k, v]) => [k, v.name]));
         await run(() => post('/api/spotify/match', { ids, names }));
+        linkState.scroll = true;
         render();
       } }, 'Find songs on YouTube Music')));
-    if (st.has_results) body.append(await reviewStep(render));
   };
   const poll = () => { let n = 0; const t = setInterval(async () => { n++; const st = await get('/api/spotify').catch(() => null); if (st?.connected || n > 120) { clearInterval(t); render(); } }, 1500); };
   await render();
@@ -578,7 +667,7 @@ export async function importView(_, el) {
 
 async function reviewStep(rerender) {
   const res = await get('/api/spotify/results');
-  const wrap = h('div', { class: 'step' }, h('div', { class: 'step-num' }, '3'));
+  const wrap = h('div', { class: 'step sp-review' }, h('div', { class: 'step-num' }, icon('check')));
   const b = h('div', { class: 'step-body' }, h('div', { class: 'step-title' }, 'Check the matches'));
   wrap.append(b);
   const c = res.counts || {};
@@ -589,8 +678,16 @@ async function reviewStep(rerender) {
     h('div', { class: 'muted small' }, total ? `${Math.round(((c.good || 0) / total) * 100)}% matched automatically` : '')));
   const includeUnsure = h('input', { type: 'checkbox' });
   includeUnsure.checked = true;
-  for (const l of res.lists || []) {
+  const lists = res.lists || [];
+  const nameInputs = new Map();
+  for (const l of lists) {
     const unsure = l.items.map((it, i) => ({ it, i })).filter(({ it }) => it.match?.status !== 'good');
+    if (l.id !== 'liked' && lists.length <= 4) {
+      const inp = h('input', { class: 'input', value: l.name, maxlength: 150, title: 'Name of the new YouTube Music playlist' });
+      nameInputs.set(l.id, inp);
+      b.append(h('div', { class: 'row-inline sp-name' }, h('span', { class: 'muted small' }, 'New playlist'), inp));
+    }
+    if (l.total > l.items.length) b.append(moreThan100(l.total, l.items.length));
     const det = h('details', { class: 'review' }, h('summary', null, h('b', null, l.name), h('span', { class: 'muted' }, ` — ${l.items.length - unsure.length} found, ${unsure.length} to check`)));
     for (const { it, i } of unsure.slice(0, 200)) {
       const m = it.match || {};
@@ -617,10 +714,28 @@ async function reviewStep(rerender) {
   b.append(h('label', { class: 'row-inline check' }, includeUnsure, 'Include “not sure” songs (the highlighted pick is used)'),
     h('div', { class: 'row-inline' }, h('button', { class: 'btn primary', onclick: async () => {
       if (!signedIn()) return needSignIn('import');
-      await run(() => post('/api/spotify/import', { ids: (res.lists || []).map((l) => l.id), include_unsure: includeUnsure.checked }));
+      const names = Object.fromEntries([...nameInputs].map(([k, inp]) => [k, inp.value.trim()]));
+      await run(() => post('/api/spotify/import', { ids: lists.map((l) => l.id), include_unsure: includeUnsure.checked, names }));
       rerender();
     } }, icon('importIco'), 'Import to YouTube Music')));
   return wrap;
+}
+
+// top search box got a Spotify link
+async function spotifySearch(body, q) {
+  body.append(skeleton('list'));
+  let p;
+  try { p = await get('/api/spotify/link?text=' + encodeURIComponent(q)); } catch (e) { body.replaceChildren(errorBox(e)); return; }
+  body.replaceChildren();
+  const acts = [];
+  if (p.kind !== 'track') {
+    acts.push(h('button', { class: 'btn primary', onclick: async () => {
+      await run(() => post('/api/spotify/match_link', { text: q }));
+      go(`#/import?link=${encodeURIComponent(q)}`);
+    } }, icon('importIco'), 'Copy to YouTube Music'));
+    if (p.kind === 'album') acts.push(h('button', { class: 'btn', onclick: () => go(`#/search?q=${encodeURIComponent(`${p.name} ${p.owner || ''}`.trim())}&filter=albums`) }, icon('search'), 'Find the album'));
+  }
+  body.append(h('div', { class: 'label' }, 'Spotify link'), spotifyPreview(p, acts));
 }
 
 export function openExternal(url) {

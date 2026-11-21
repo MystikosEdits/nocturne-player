@@ -18,6 +18,7 @@ fi
 "$UV" pip install --python "$ROOT/.venv/bin/python" -r "$ROOT/requirements.txt"
 
 # 3. mpv (the audio engine): the official build from github.com/mpv-player/mpv for this Mac
+#    (it includes Rubber Band, which Nocturne uses for "keep original pitch"; checked on v0.42.0 on Grant's Mac, Nov 20)
 if [ ! -x "$ROOT/bin/mpv.app/Contents/MacOS/mpv" ]; then
   MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
   if [ "$(uname -m)" = "arm64" ]; then KIND=arm; else KIND=intel; fi

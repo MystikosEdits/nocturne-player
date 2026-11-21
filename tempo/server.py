@@ -9,7 +9,7 @@ import webbrowser
 
 from aiohttp import web
 
-from . import config, yt as ytmod
+from . import config, spotify as spmod, yt as ytmod
 
 log = logging.getLogger("tempo.server")
 ALLOWED_HOSTS = {f"127.0.0.1:{config.PORT}", f"localhost:{config.PORT}"}
@@ -316,6 +316,8 @@ def make_app(app_ctx) -> web.Application:
         f = request.query.get("filter") or None
         if not q:
             return ok({"shelves": []})
+        if spmod.is_link(q):
+            return ok({"spotify": q})
         link = ytmod.parse_link(q)
         if link:
             return ok({"link": link})
@@ -618,6 +620,20 @@ def make_app(app_ctx) -> web.Application:
         sp.start_match(b.get("ids") or [], b.get("names") or {})
         return ok(sp.status())
 
+    async def sp_link(request):
+        try:
+            return ok(await blocking(sp.link_preview, request.query.get("text") or ""))
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+    async def sp_match_link(request):
+        b = await body(request)
+        try:
+            sp.start_link_match(b.get("text") or "")
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return ok(sp.status())
+
     async def sp_results(request):
         return ok(sp.results or {})
 
@@ -628,7 +644,7 @@ def make_app(app_ctx) -> web.Application:
 
     async def sp_import(request):
         b = await body(request)
-        sp.start_import(b.get("ids") or [], bool(b.get("include_unsure")))
+        sp.start_import(b.get("ids") or [], bool(b.get("include_unsure")), b.get("names") or {})
         return ok(sp.status())
 
     async def sp_job(request):
@@ -641,6 +657,8 @@ def make_app(app_ctx) -> web.Application:
     r.add_post("/api/spotify/disconnect", sp_disconnect)
     r.add_get("/api/spotify/playlists", sp_playlists)
     r.add_post("/api/spotify/match", sp_match)
+    r.add_get("/api/spotify/link", sp_link)
+    r.add_post("/api/spotify/match_link", sp_match_link)
     r.add_get("/api/spotify/results", sp_results)
     r.add_post("/api/spotify/choose", sp_choose)
     r.add_post("/api/spotify/import", sp_import)

@@ -40,13 +40,26 @@ $vpy = "$root\.venv\Scripts\python.exe"
 & $vpy -m pip install -r "$root\requirements.txt" --quiet
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
-# 3. mpv (the audio engine): the official build from github.com/mpv-player/mpv
+# 3. mpv (the audio engine): the official build from github.com/mpv-player/mpv.
+#    The "-w64-mingw32-full" build includes Rubber Band (clean "keep original pitch" on slowed / sped-up
+#    versions); the "-msvc" one doesn't. An older install without it gets upgraded.
 $mpvExe = "$root\bin\mpv\mpv.exe"
-if (-not (Test-Path $mpvExe)) {
+$needMpv = -not (Test-Path $mpvExe)
+if (-not $needMpv) {
+    $afList = & "$root\bin\mpv\mpv.com" --no-config --af=help 2>$null | Out-String
+    if ($afList -notmatch 'rubberband') { $needMpv = $true; Write-Host "Updating mpv to a build with Rubber Band..." }
+}
+if ($needMpv) {
     $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
     $rel = Invoke-RestMethod 'https://api.github.com/repos/mpv-player/mpv/releases/latest' -Headers @{ 'User-Agent' = 'nocturne-setup' }
-    $asset = $rel.assets | Where-Object { $_.name -match "^mpv-v[\d.]+-$arch-pc-windows-msvc\.zip$" } | Select-Object -First 1
+    $asset = $rel.assets | Where-Object { $_.name -match "^mpv-v[\d.]+-$arch-w64-mingw32-full\.zip$" } | Select-Object -First 1
+    if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -match "^mpv-v[\d.]+-$arch-pc-windows-msvc\.zip$" } | Select-Object -First 1 }
     if (-not $asset) { throw "Couldn't find an mpv download for $arch" }
+    # a running Nocturne keeps mpv.exe open: it can't be overwritten, but it can be renamed out of the way
+    if (Test-Path $mpvExe) {
+        Get-ChildItem "$root\bin\mpv" -Filter 'mpv.old-*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Rename-Item $mpvExe ("mpv.old-{0}.exe" -f (Get-Date -Format 'yyyyMMddHHmmss'))
+    }
     Write-Host "Downloading $($asset.name)..."
     $zip = Join-Path $env:TEMP $asset.name
     Invoke-WebRequest $asset.browser_download_url -OutFile $zip
@@ -56,6 +69,10 @@ if (-not (Test-Path $mpvExe)) {
     $found = Get-ChildItem $tmp -Recurse -Filter mpv.exe | Select-Object -First 1
     New-Item -ItemType Directory -Force "$root\bin\mpv" | Out-Null
     Copy-Item (Join-Path $found.DirectoryName '*') "$root\bin\mpv" -Recurse -Force
+    # the old build's leftovers (skipped while a running Nocturne still has them open; the next run gets them)
+    $old = @(Get-ChildItem "$root\bin\mpv" -Filter 'mpv.old-*.exe' -ErrorAction SilentlyContinue)
+    if (-not (Test-Path (Join-Path $found.DirectoryName 'vulkan-1.dll'))) { $old += @(Get-ChildItem "$root\bin\mpv" -Filter 'vulkan-1.dll' -ErrorAction SilentlyContinue) }
+    $old | Remove-Item -Force -ErrorAction SilentlyContinue
     Remove-Item $zip, $tmp -Recurse -Force
 }
 Write-Host "mpv: $mpvExe"

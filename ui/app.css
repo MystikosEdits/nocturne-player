@@ -188,6 +188,8 @@ h2 { font: 650 19px/1.2 var(--font-d); letter-spacing: -.01em; margin: 0; }
 .art.xs { width: 32px; height: 32px; border-radius: 4px; }
 .art.sm { width: 40px; height: 40px; border-radius: 4px; }
 .art.lg { width: 92px; height: 92px; border-radius: 8px; }
+.art.md { width: 64px; height: 64px; border-radius: 6px; flex: none; }
+.art.md svg { width: 26px; height: 26px; }
 .art.bar { width: 56px; height: 56px; border-radius: 6px; }
 .art.cover { width: 212px; height: 212px; border-radius: 10px; box-shadow: 0 18px 50px rgba(0, 0, 0, .55); }
 .art.avatar { width: 52px; height: 52px; }
@@ -568,6 +570,19 @@ code, .copyable { font-family: ui-monospace, Consolas, monospace; font-size: 12p
 .sp-item:hover { background: var(--hover); }
 .sp-item.dim { opacity: .4; cursor: default; }
 .sp-item input { accent-color: rgb(var(--acc)); width: 16px; height: 16px; }
+.sp-link { max-width: 620px; font-size: 13px; margin-top: 10px; min-height: 44px; }
+.sp-prev { max-width: 620px; }
+.sp-preview { display: flex; align-items: center; gap: 14px; margin-top: 12px; padding: 10px; border-radius: var(--r2); background: rgb(var(--ink) / .04); border: 1px solid var(--line); max-width: 620px; }
+.sp-preview .tt { flex: 1; min-width: 0; }
+.sp-pname { color: var(--text); font-weight: 650; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-pact { display: flex; gap: 8px; flex: none; }
+.sp-note { margin: 10px 0 0; max-width: 620px; }
+.sp-gap { margin-top: 14px; }
+.sp-or { display: flex; align-items: center; gap: 12px; color: var(--text3); font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; margin: 8px 0 22px; }
+.sp-or::before, .sp-or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.sp-name { margin: 0 0 8px; }
+.sp-name .muted { flex: none; }
+.sp-review .review { margin-bottom: 12px; }
 .bar { height: 6px; background: rgb(var(--ink) / .1); border-radius: 4px; overflow: hidden; flex: 1; }
 .bar.big { height: 8px; margin: 8px 0; }
 .bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s; }
