@@ -35,6 +35,29 @@ class JsApi:
         self._keeper = None     # winscale.DpiKeeper (Windows), private for the same reason
         self._thumbbar = None   # thumbbar.ThumbBar (Windows taskbar hover buttons), private for the same reason
 
+    def set_app_icon(self, hue):
+        """Settings -> Colours -> App icon: the window / taskbar (Windows) or Dock (Mac) icon of THIS process."""
+        win = self._window
+        if not win:
+            return False
+        try:
+            from . import appicon
+            p = appicon.paths(int(hue))
+            if config.IS_WIN:
+                from System import Action
+                from System.Drawing import Icon
+                form = win.native
+                form.BeginInvoke(Action(lambda: setattr(form, "Icon", Icon(str(p["ico"])))))
+            elif config.IS_MAC:
+                from PyObjCTools import AppHelper
+                import AppKit
+                path = str(p["png"] if int(hue) else p["icns"])
+                AppHelper.callAfter(lambda: AppKit.NSApplication.sharedApplication().setApplicationIconImage_(
+                    AppKit.NSImage.alloc().initWithContentsOfFile_(path)))
+            return True
+        except Exception as e:      # noqa: BLE001
+            return {"error": str(e)}
+
     def thumbbar_state(self, playing):
         """The page reports play / pause so the taskbar hover button shows the right icon."""
         if self._thumbbar:
@@ -208,7 +231,11 @@ def _style_mac(win):
                 w.contentView().superview().subviews().lastObject().setBackgroundColor_(AppKit.NSColor.clearColor())
             except Exception:
                 pass
-            icon = config.ASSETS / "nocturne.icns"
+            try:
+                from . import appicon
+                icon = appicon.paths()["png" if appicon.current() else "icns"]
+            except Exception:
+                icon = config.ASSETS / "nocturne.icns"
             if icon.exists():
                 img = AppKit.NSImage.alloc().initWithContentsOfFile_(str(icon))
                 AppKit.NSApplication.sharedApplication().setApplicationIconImage_(img)
@@ -434,6 +461,10 @@ def main():
         if config.IS_MAC:
             _style_mac(win)
 
-    icon = config.ASSETS / ("nocturne.ico" if config.IS_WIN else "nocturne.png")
+    try:
+        from . import appicon
+        icon = appicon.paths()["ico" if config.IS_WIN else "png"]     # the hue chosen in Settings -> Colours
+    except Exception:
+        icon = config.ASSETS / ("nocturne.ico" if config.IS_WIN else "nocturne.png")
     webview.start(started, private_mode=False, storage_path=str(config.DATA / "webview"),
                   icon=str(icon) if icon.exists() else None, debug=os.environ.get("TEMPO_DEBUG") == "1")

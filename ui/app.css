@@ -965,3 +965,26 @@ body.theme-light .toast-act { background: rgb(255 255 255 / .1); }
 .keys-sheet .keys { white-space: nowrap; }
 body:has(.selbar.in) #toasts { bottom: calc(var(--bar-h) + 72px); }   /* toasts sit above the selection bar */
 body:has(.selbar.in) #view { padding-bottom: 64px; }   /* the last rows can scroll out from under the bar */
+
+/* ============================================================ settings layout (Nov 22: categories + search) */
+.set-layout { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 28px; align-items: start; max-width: 1080px; }
+.set-nav { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 1px; padding-top: 2px; }
+.set-nav-cat { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text3); margin: 14px 0 4px 10px; }
+.set-nav-cat:first-child { margin-top: 0; }
+.set-nav-item { display: block; padding: 6px 10px; border-radius: var(--r); color: var(--text2); font-size: 13.5px; font-weight: 560; text-decoration: none !important; transition: background .12s, color .12s; }
+.set-nav-item:hover { background: var(--hover); color: var(--text); }
+.set-nav-item.on { background: var(--hover2); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.set-nav-item.dim { opacity: .35; }
+.set-body { min-width: 0; }
+.set-search { margin: 0 0 18px; max-width: 420px; }
+.set-none { color: var(--text2); padding: 30px 18px; }
+.set-row.set-miss, .acct.set-miss { display: none; }
+.set-sec { scroll-margin-top: 70px; }
+@container main (max-width: 760px) {
+  .set-layout { grid-template-columns: minmax(0, 1fr); }
+  .set-nav { display: none; }
+}
+/* app icon hue */
+.icon-hue { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.icon-prev { width: 44px; height: 44px; border-radius: 10px; flex: none; transition: filter .05s; }
+.hue-range::-webkit-slider-runnable-track { background: linear-gradient(90deg, hsl(259 85% 62%), hsl(319 85% 62%), hsl(19 85% 62%), hsl(79 85% 55%), hsl(139 85% 50%), hsl(199 85% 55%), hsl(259 85% 62%)) !important; }

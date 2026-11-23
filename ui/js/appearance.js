@@ -1,6 +1,6 @@
 // Settings -> Appearance: everything about how Nocturne looks, applied live as you change it. Includes every
 // Reaction Desk look, its rainbow options and its three effects (snow / starfield / embers) with all their knobs.
-import { post } from './api.js';
+import { post, get } from './api.js';
 import { h, icon, toast } from './ui.js';
 import { PALETTES, DESK_LOOKS, ACCENTS, FONTS, getTheme, setTheme, resetTheme, flushTheme, onTheme, paletteOf, pickPalette } from './theme.js';
 import { FX_DEF, FX_KNOBS, fmtKnob, clearSnow } from './effects.js';
@@ -82,11 +82,14 @@ export function npControls(compact = false) {
 }
 
 // ------------------------------------------------------------------ the section
-export function appearanceSection() {
+/* Settings -> the look, as six groups (Nov 22, Grant: "organize settings better"): Theme, Colours & icon, Background,
+   Effects, Now Playing, Layout & text. Returns [{id, title, el}] for views.js to lay out with the category list. */
+export function appearanceSections() {
   const t = getTheme();
-  const card = h('div', { class: 'set-card' });
+  const cTheme = h('div', { class: 'set-card' }), cCol = h('div', { class: 'set-card' }), cBg = h('div', { class: 'set-card' });
+  const cFx = h('div', { class: 'set-card' }), cNp = h('div', { class: 'set-card' }), cLay = h('div', { class: 'set-card' });
 
-  card.append(h('div', { class: 'set-row col' }, h('div', { class: 'set-text' }, h('div', { class: 'set-title' }, 'Theme'),
+  cTheme.append(h('div', { class: 'set-row col' }, h('div', { class: 'set-text' },
     h('div', { class: 'set-desc' }, 'Every Reaction Desk look is here too. A seasonal look turns its effect on (snow, embers or stars); you can change it below.')), themeGrid()));
 
   // accent
@@ -103,7 +106,8 @@ export function appearanceSection() {
     style: c === 'auto' || c === 'rainbow' ? {} : { background: c }, onclick: () => pickAcc(c) }, c === 'auto' ? 'A' : '')));
   custom.addEventListener('input', () => { acc.querySelectorAll('.sw').forEach((x) => x.classList.remove('on')); setTheme({ accent: custom.value }); });
   acc.append(h('label', { class: 'sw custom', title: 'Pick any colour' }, icon('palette'), custom));
-  card.append(row('Accent colour', '“A” follows the album art. The striped one cycles through the rainbow.', acc));
+  cCol.append(row('Accent colour', '“A” follows the album art. The striped one cycles through the rainbow.', acc));
+  cCol.append(appIconRow());
 
   // background
   const bgBox = h('div', { class: 'bg-opts' });
@@ -148,7 +152,7 @@ export function appearanceSection() {
         row('Glass', 'How see-through the sidebar, player bar and panels are.', range(0, 100, 1, getTheme().glass, (v) => `${v}%`, (v) => setTheme({ glass: v }))));
     }
   };
-  card.append(row('Background', null, seg([['none', 'None'], ['art', 'Album art'], ['colour', 'Colour'], ['gradient', 'Gradient'], ['image', 'Image'], ['rainbow', 'Rainbow']], t.bg.type, (v) => {
+  cBg.append(row('Background', null, seg([['none', 'None'], ['art', 'Album art'], ['colour', 'Colour'], ['gradient', 'Gradient'], ['image', 'Image'], ['rainbow', 'Rainbow']], t.bg.type, (v) => {
     setTheme({ bg: { type: v }, glass: getTheme().glass || (v === 'none' ? 0 : 45), ...(v === 'rainbow' && !getTheme().bg.dim ? { bg: { type: v, dim: 30 } } : {}) });
     renderBg();
   })), bgBox);
@@ -165,7 +169,7 @@ export function appearanceSection() {
   });
   const tintAmt = range(0, 40, 1, t.wash.amount, pct, (v) => setTheme({ wash: { amount: v } }));
   const syncTint = () => { const inp = tintAmt.querySelector('input'); inp.value = getTheme().wash.amount; inp.dispatchEvent(new Event('input')); };
-  card.append(row('Tint the app', 'Mixes a colour into every surface.', h('div', { class: 'row-inline tight' }, tintRb, tintC, tintAmt)));
+  cCol.append(row('Tint the app', 'Mixes a colour into every surface.', h('div', { class: 'row-inline tight' }, tintRb, tintC, tintAmt)));
 
   // rainbow speed: only while something is cycling
   const rbRow = row('Rainbow speed', 'One speed for the rainbow accent, background and tint.', range(10, 400, 5, t.rainbowSpeed, (v) => `×${(v / 100).toFixed(2)}`, (v) => setTheme({ rainbowSpeed: v }), 100));
@@ -174,7 +178,7 @@ export function appearanceSection() {
     rbRow.style.display = th.accent === 'rainbow' || (L && L.acc === 'rainbow') || th.bg.type === 'rainbow' || (th.wash.color === 'rainbow' && th.wash.amount > 0) ? '' : 'none';
   };
   syncRb(t);
-  card.append(rbRow);
+  cCol.append(rbRow);
 
   // effects
   const fxBox = h('div', { class: 'bg-opts' });
@@ -200,12 +204,12 @@ export function appearanceSection() {
       h('button', { class: 'btn', style: { alignSelf: 'flex-start' }, onclick: () => { setTheme({ fx: { [fx.type]: { ...FX_DEF[fx.type] } } }); renderFx(); } }, 'Reset this effect')));
   };
   const fxSeg = seg([['off', 'Off'], ['snow', 'Snow'], ['stars', 'Starfield'], ['embers', 'Embers']], t.fx.type, (v) => { setTheme({ fx: { type: v } }); renderFx(); });
-  card.append(row('Effect', 'From the Reaction Desk. Paused whenever the window is hidden or minimised.', fxSeg), fxBox);
+  cFx.append(row('Effect', 'From the Reaction Desk. Paused whenever the window is hidden or minimised.', fxSeg), fxBox);
   renderFx();
   // a seasonal look switches the effect: keep the control in step
   let lastFx = t.fx.type, lastShovel = !!t.fx.snow?.shovel;
   const off = onTheme((th) => {
-    if (!card.isConnected) { off(); return; }      // Settings was left: stop listening
+    if (!cFx.isConnected) { off(); return; }       // Settings was left: stop listening
     syncRb(th);
     if (th.fx.type !== lastFx) {
       lastFx = th.fx.type;
@@ -216,10 +220,10 @@ export function appearanceSection() {
   });
 
   // now playing
-  card.append(h('div', { class: 'set-row sub-head' }, h('div', { class: 'set-title' }, 'Now Playing background')), npControls());
+  cNp.append(npControls());
 
   // layout + type
-  card.append(
+  cLay.append(
     row('Size', 'Scales the whole app.', range(80, 130, 5, t.scale, (v) => `${v}%`, (v) => setTheme({ scale: v }))),
     row('Corners', null, range(0, 20, 1, t.radius, (v) => (v ? `${v}px` : 'Square'), (v) => setTheme({ radius: v }))),
     row('Density', 'Compact fits more songs on screen.', seg([['comfortable', 'Comfortable'], ['compact', 'Compact']], t.density, (v) => setTheme({ density: v }))),
@@ -227,5 +231,63 @@ export function appearanceSection() {
     row('Colour page headers', 'Albums, playlists and artists glow in their artwork’s colour.', toggleEl(t.tint, (v) => setTheme({ tint: v }))),
     row('Reset', 'Back to the original Nocturne look.', h('button', { class: 'btn', onclick: () => { resetTheme(); flushTheme().then(() => location.reload()); } }, 'Reset appearance')),
   );
-  return h('section', { class: 'set-sec' }, h('h2', null, 'Appearance'), card);
+  return [
+    { id: 'theme', title: 'Theme', el: cTheme },
+    { id: 'colours', title: 'Colours & icon', el: cCol },
+    { id: 'background', title: 'Background', el: cBg },
+    { id: 'effects', title: 'Effects', el: cFx },
+    { id: 'nowplaying', title: 'Now Playing', el: cNp },
+    { id: 'layout', title: 'Layout & text', el: cLay },
+  ];
+}
+
+// ------------------------------------------------------------------ app icon hue (Grant, Nov 22)
+// Drag = instant preview (CSS hue-rotate on the preview + the sidebar logo); let go = the engine renders the icon in that
+// hue and puts it everywhere the OS shows Nocturne (tray, taskbar, shortcuts / Dock, Finder), see tempo/appicon.py.
+function rgbHue(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  if (!d) return null;
+  let hh = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return Math.round(hh * 60 + 360) % 360;
+}
+function appIconRow() {
+  let saved = 0, base = 259;
+  const prev = h('img', { class: 'icon-prev', alt: '', src: '/api/appicon.png' });
+  const out = h('span', { class: 'sl-val' }, 'Original');
+  const input = h('input', { type: 'range', class: 'range hue-range', min: 0, max: 359, step: 1, value: 0 });
+  const label = (v) => (v ? `${v}°` : 'Original');
+  const brand = () => document.querySelector('.brand img');
+  const preview = (v) => {
+    out.textContent = label(v);
+    const f = v === saved ? '' : `hue-rotate(${v - saved}deg)`;
+    prev.style.filter = f;
+    if (brand()) brand().style.filter = f;
+  };
+  const commit = async (v) => {
+    v = ((Math.round(v) % 360) + 360) % 360;
+    input.value = v; preview(v);
+    try {
+      await post('/api/appicon', { hue: v });
+      saved = v;
+      const src = `/api/appicon.png?h=${v}`;
+      prev.src = src; prev.style.filter = '';
+      if (brand()) { brand().src = src; brand().style.filter = ''; }
+      window.pywebview?.api?.set_app_icon?.(v)?.catch?.(() => {});
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  input.addEventListener('input', () => preview(+input.value));
+  input.addEventListener('change', () => commit(+input.value));
+  get('/api/appicon').then((r) => { saved = r.hue || 0; base = r.base ?? 259; input.value = saved; out.textContent = label(saved); }).catch(() => {});
+  const matchAcc = h('button', { class: 'btn', title: 'Turn the icon the same colour as your accent', onclick: () => {
+    const acc = getComputedStyle(document.documentElement).getPropertyValue('--acc').trim().split(/[\s,]+/).map(Number);
+    const ah = acc.length >= 3 ? rgbHue(acc[0], acc[1], acc[2]) : null;
+    if (ah === null) return toast('Your accent is grey: pick a colour first');
+    commit(ah - base);
+  } }, 'Match accent');
+  const reset = h('button', { class: 'btn', onclick: () => commit(0) }, 'Original');
+  return h('div', { class: 'set-row' },
+    h('div', { class: 'set-text' }, h('div', { class: 'set-title' }, 'App icon'),
+      h('div', { class: 'set-desc' }, 'Turns Nocturne’s moon any colour: here, the taskbar / Dock, the tray and the Start menu. The Mac menu-bar icon stays black and white (macOS draws it).')),
+    h('div', { class: 'icon-hue' }, prev, h('div', { class: 'ap-range' }, input, out), h('div', { class: 'row-inline tight' }, matchAcc, reset)));
 }

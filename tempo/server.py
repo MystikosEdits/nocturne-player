@@ -567,6 +567,30 @@ def make_app(app_ctx) -> web.Application:
             webbrowser.open(url)
         return ok()
 
+    # ---------------- app icon hue (settings.icon_hue; tempo/appicon.py)
+    async def appicon_get(request):
+        from . import appicon
+        return ok({"hue": appicon.current(), "base": await blocking(appicon.base_hue)})
+
+    async def appicon_set(request):
+        from . import appicon
+        hue = appicon.clamp((await body(request)).get("hue"))
+        await blocking(appicon.paths, hue)                 # render it first (so nothing shows a missing file)
+        eng.settings.update({"icon_hue": hue})
+        await blocking(appicon.apply_engine, app_ctx, hue)
+        await blocking(appicon.prune, hue)
+        eng.emit("icon", {"hue": hue})
+        return ok({"hue": hue})
+
+    async def appicon_png(request):
+        from . import appicon
+        h = request.query.get("h")
+        p = (await blocking(appicon.paths, appicon.clamp(h) if h is not None else None))["png"]
+        return web.FileResponse(p, headers={"Cache-Control": "max-age=31536000" if h is not None else "no-cache"})
+
+    r.add_get("/api/appicon", appicon_get)
+    r.add_post("/api/appicon", appicon_set)
+    r.add_get("/api/appicon.png", appicon_png)
     r.add_get("/api/settings", settings_get)
     r.add_post("/api/settings", settings_set)
     r.add_post("/api/open", open_url)

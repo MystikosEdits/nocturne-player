@@ -75,7 +75,7 @@ function buildSidebar() {
   const side = $('#side');
   const nav = (route, label, ico, hash) => h('a', { class: 'nav-item', href: hash || `#/${route}`, dataset: { route } }, icon(ico), h('span', null, label));
   side.append(
-    h('div', { class: 'brand' }, h('img', { src: '/assets/nocturne-512.png', alt: '' }), h('span', null, 'Nocturne'), sideToggleBtn()),
+    h('div', { class: 'brand' }, h('img', { src: '/api/appicon.png', alt: '' }), h('span', null, 'Nocturne'), sideToggleBtn()),
     h('nav', { class: 'nav' }, nav('home', 'Home', 'home'), nav('explore', 'Explore', 'explore'), nav('library', 'Library', 'library', '#/library/playlists')),
     h('div', { class: 'side-sep' }),
     sideHead = h('div', { class: 'side-head' }, h('button', { class: 'side-fold', title: 'Show / hide your playlists', onclick: togglePlaylists }, h('span', null, 'Playlists'), icon('chevDown')), btn('folderPlus', 'New folder', () => sideCfg().then(() => newFolder())), btn('plus', 'New playlist', async () => {

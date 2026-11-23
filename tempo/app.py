@@ -339,7 +339,13 @@ def keep_menu_helper(ctx: AppContext, icon):
 def make_tray(ctx: AppContext):
     import pystray
     from PIL import Image
-    icon_file = config.ASSETS / ("nocturne-tray-mac.png" if config.IS_MAC else "nocturne-tray.png")
+    icon_file = config.ASSETS / "nocturne-tray-mac.png"
+    if not config.IS_MAC:
+        try:
+            from . import appicon
+            icon_file = appicon.paths()["tray"]          # the hue chosen in Settings -> Colours
+        except Exception:
+            icon_file = config.ASSETS / "nocturne-tray.png"
     img = Image.open(icon_file)
 
     def act(fn):

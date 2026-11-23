@@ -84,6 +84,7 @@ DEFAULTS = {
     # iPhone-style background sounds, played by a second little player
     "sidebar": {"pinned": [], "folders": []},   # playlist pins + folders (Nocturne only; YouTube has neither)
     "bg_sound": {"on": False, "mix": {"rain_roof": 100}, "volume": 40, "with_music": 25, "stop_with_music": False, "stop_with_sleep": True},
+    "icon_hue": 0,                # app icon hue shift in degrees (tempo/appicon.py); 0 = the original violet
     "theme": None,                # appearance (the UI owns its shape; stored here so it survives)
 }
 

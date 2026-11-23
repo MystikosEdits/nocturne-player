@@ -4,7 +4,7 @@ import { get, post, cached, dropCache, cmd } from './api.js';
 import {
   h, icon, btn, pill, img, go, store, on, shelf, grid, empty, skeleton, errorBox, toast, run, modal,
   prompt, playTracks, playKind, playItem, artColor, fmtTime, fmtBytes, artistLinks, myPlaylists, isMac,
-  copyLink, menu, addToPlaylistMenu, needSignIn, trackMenu, collectionMenu, prefetchOnHover, prefetchPageOnHover,
+  copyLink, menu, addToPlaylistMenu, needSignIn, trackMenu, collectionMenu, prefetchOnHover, prefetchPageOnHover, pageZoom,
 } from './ui.js';
 import { trackList } from './tracklist.js';
 import { shortcutRows } from './shortcuts.js';
@@ -392,15 +392,19 @@ function setRow(title, desc, control) {
 }
 function section(title, ...rows) { return h('section', { class: 'set-sec' }, h('h2', null, title), h('div', { class: 'set-card' }, ...rows)); }
 
+/* SETTINGS (reorganised Nov 22, Grant: "organize settings better"): every group is its own card, listed in a sticky
+   category column on the left (it follows your scroll), with a search box that filters rows as you type. */
 export async function settings(_, el) {
   const data = await get('/api/settings');
   const s = data.settings;
   const save = (patch) => run(() => post('/api/settings', patch)).then(() => Object.assign(s, patch));
-  el.append(pageHead('Settings'));
+  const groups = [];          // [{id, title, cat, el}] in page order
+  const add = (cat, id, title, card) => groups.push({ cat, id, title, el: card });
+  const card = (...rows) => h('div', { class: 'set-card' }, ...rows);
 
   // account
   const auth = store.state?.auth || {};
-  const acct = h('div', { class: 'set-card' });
+  const acct = card();
   if (auth.yt) {
     const a = auth.account || {};
     acct.append(h('div', { class: 'acct' },
@@ -416,44 +420,106 @@ export async function settings(_, el) {
       h('button', { class: 'btn primary', onclick: signInGoogle }, 'Sign in with Google')));
     acct.append(h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-desc' }, 'Google sign-in blocked in the window? ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); pasteSignIn(); } }, 'Paste your sign-in from the browser instead')))));
   }
-  el.append(h('section', { class: 'set-sec' }, h('h2', null, 'Account'), acct));
+  add('Account', 'account', 'Account', acct);
 
-  const { appearanceSection } = await import('./appearance.js');
-  el.append(appearanceSection());
+  // the look
+  const { appearanceSections } = await import('./appearance.js');
+  for (const g of appearanceSections()) add('Look', g.id, g.title, g.el);
 
-  el.append(section('Sound',
-    setRow('Equalizer', s.eq?.on ? `On: ${s.eq.preset}` : 'Off. 10 bands, presets, preamp.', h('button', { class: 'btn', onclick: () => import('./fxpanel.js').then((m) => m.openEq()) }, icon('sliders'), 'Open equalizer')),
-    setRow('Slowed / reverb / sped up', 'Right-click any song, or use the wand in the player bar. Saved ones live in Library → My versions.', h('button', { class: 'btn', onclick: () => go('#/library/versions') }, icon('wand'), 'My versions')),
-    setRow('Effects on every song', s.global_fx?.on ? `On: ${describeGlobal(s.global_fx.fx)}` : 'Off. Play everything slowed, reverbed, muffled… (saved versions keep their own).', h('button', { class: 'btn', onclick: () => import('./fxpanel.js').then((m) => m.openFx(null, { global: true })) }, icon('wand'), 'Set up')),
-    setRow('Background sounds', s.bg_sound?.on ? `On: ${Object.keys(s.bg_sound.mix || { [s.bg_sound.sound]: 1 }).length} sound${Object.keys(s.bg_sound.mix || {}).length === 1 ? '' : 's'} playing` : 'Rain, thunder, ocean, fireplace, crickets, café, train, noise. Mix up to 4. Plays under or between your music.', h('button', { class: 'btn', onclick: () => import('./fxpanel.js').then((m) => m.openBg()) }, icon('cloudRain'), 'Open')),
-  ));
-
-  el.append(section('Playback',
+  add('Listening', 'playback', 'Playback', card(
     setRow('Audio quality', 'Best: a song you click starts instantly, and everything queued after it loads at 256 kbps (Premium). Downloads are always 256 kbps. Data saver uses less internet.',
       selectEl([['best', 'Best available'], ['normal', 'Data saver']], s.quality, (v) => save({ quality: v }))),
     setRow('Autoplay similar songs', 'When your queue ends, keep going with songs like the last one.', toggle(s.autoplay, (v) => cmd('autoplay', v))),
     setRow('Even out volume', 'Keeps loud and quiet songs at a similar level.', toggle(s.normalize, (v) => save({ normalize: v }))),
     setRow('Count plays in my YouTube history', 'Songs you play teach YouTube Music’s recommendations, same as the official app.', toggle(s.log_history, (v) => save({ log_history: v }))),
   ));
-
-  el.append(section('App',
-    setRow('Keep playing when the window is closed', 'Music keeps going from the tray / menu bar, and the window’s memory is freed.', toggle(s.keep_playing_on_close, (v) => save({ keep_playing_on_close: v }))),
-    setRow('Start Nocturne when the computer starts', 'Starts quietly in the background, ready for your media keys.', toggle(s.start_at_login, (v) => save({ start_at_login: v }))),
+  add('Listening', 'sound', 'Sound & effects', card(
+    setRow('Equalizer', s.eq?.on ? `On: ${s.eq.preset}` : 'Off. 10 bands, presets, preamp.', h('button', { class: 'btn', onclick: () => import('./fxpanel.js').then((m) => m.openEq()) }, icon('sliders'), 'Open equalizer')),
+    setRow('Slowed / reverb / sped up', 'Right-click any song, or use the wand in the player bar. Saved ones live in Library → My versions.', h('button', { class: 'btn', onclick: () => go('#/library/versions') }, icon('wand'), 'My versions')),
+    setRow('Effects on every song', s.global_fx?.on ? `On: ${describeGlobal(s.global_fx.fx)}` : 'Off. Play everything slowed, reverbed, muffled… (saved versions keep their own).', h('button', { class: 'btn', onclick: () => import('./fxpanel.js').then((m) => m.openFx(null, { global: true })) }, icon('wand'), 'Set up')),
+    setRow('Background sounds', s.bg_sound?.on ? `On: ${Object.keys(s.bg_sound.mix || { [s.bg_sound.sound]: 1 }).length} sound${Object.keys(s.bg_sound.mix || {}).length === 1 ? '' : 's'} playing` : 'Rain, thunder, ocean, fireplace, crickets, café, train, noise. Mix up to 4. Plays under or between your music.', h('button', { class: 'btn', onclick: () => import('./fxpanel.js').then((m) => m.openBg()) }, icon('cloudRain'), 'Open')),
   ));
-
-  el.append(section('Music from elsewhere',
-    setRow('Import from Spotify', 'Copy your Spotify playlists and liked songs into YouTube Music.', h('button', { class: 'btn', onclick: () => go('#/import') }, icon('importIco'), 'Open')),
+  add('Listening', 'library', 'Library & import', card(
+    setRow('Import from Spotify', 'Paste any Spotify playlist, album or song link (anyone’s), or copy your own playlists and liked songs.', h('button', { class: 'btn', onclick: () => go('#/import') }, icon('importIco'), 'Open')),
     setRow('Downloads', `${data.offline.count} songs • ${fmtBytes(data.offline.bytes)}`, h('button', { class: 'btn', onclick: () => go('#/library/downloads') }, 'Manage')),
   ));
 
+  add('App', 'app', 'Window & startup', card(
+    setRow('Keep playing when the window is closed', 'Music keeps going from the tray / menu bar, and the window’s memory is freed.', toggle(s.keep_playing_on_close, (v) => save({ keep_playing_on_close: v }))),
+    setRow('Start Nocturne when the computer starts', 'Starts quietly in the background, ready for your media keys.', toggle(s.start_at_login, (v) => save({ start_at_login: v }))),
+  ));
+  add('App', 'shortcuts', 'Keyboard shortcuts', card(...shortcutRows()));
   const mem = data.memory || {};
-  el.append(section('Shortcuts', ...shortcutRows()));
-  el.append(section('About',
+  add('App', 'about', 'About', card(
     setRow('Memory', 'The background player. The window adds its own while it’s open.', h('div', { class: 'mono' }, `${(mem.engine || 0) + (mem.player || 0)} MB`)),
     setRow('Version', null, h('div', { class: 'mono' }, data.version)),
     setRow('Data folder', data.data_dir, h('div')),
   ));
-  return { title: 'Settings' };
+
+  // ---- layout: category column + search + the cards
+  const secs = groups.map((g) => {
+    const sec = h('section', { class: 'set-sec', id: `set-${g.id}`, dataset: { id: g.id } }, h('h2', null, g.title), g.el);
+    g.sec = sec;
+    return sec;
+  });
+  const nav = h('nav', { class: 'set-nav' });
+  let lastCat = null;
+  for (const g of groups) {
+    if (g.cat !== lastCat) { nav.append(h('div', { class: 'set-nav-cat' }, g.cat)); lastCat = g.cat; }
+    g.link = h('a', { class: 'set-nav-item', href: `#/settings?s=${g.id}`, onclick: (e) => { e.preventDefault(); jump(g.id); } }, g.title);
+    nav.append(g.link);
+  }
+  const scroller = () => document.getElementById('main-scroll');
+  // a group's top inside the scroller, in CSS px (rects are screen px under Settings -> Size: divide by the zoom)
+  const topOf = (sec) => { const sc = scroller(); return sc ? (sec.getBoundingClientRect().top - sc.getBoundingClientRect().top) / pageZoom() + sc.scrollTop : 0; };
+  const jump = (id) => {
+    const g = groups.find((x) => x.id === id);
+    if (!g) return;
+    if (search.value) { search.value = ''; filter(''); }
+    scroller()?.scrollTo({ top: Math.max(0, topOf(g.sec) - 70), behavior: 'smooth' });
+    mark(id);
+  };
+  const mark = (id) => groups.forEach((g) => g.link.classList.toggle('on', g.id === id));
+
+  // search: rows whose text matches; whole groups whose title matches; nothing found -> a hint
+  const search = h('input', { class: 'input set-search', type: 'search', placeholder: 'Search settings (theme, icon, equalizer, startup…)', spellcheck: false });
+  const none = h('div', { class: 'set-none' }, 'No settings match. Try another word.');
+  const filter = (q) => {
+    q = q.trim().toLowerCase();
+    let any = false;
+    for (const g of groups) {
+      const titleHit = !q || g.title.toLowerCase().includes(q) || g.cat.toLowerCase().includes(q);
+      let rowsHit = 0;
+      g.el.querySelectorAll('.set-row, .acct').forEach((r) => {
+        const hit = titleHit || r.textContent.toLowerCase().includes(q);
+        r.classList.toggle('set-miss', !hit);
+        if (hit) rowsHit++;
+      });
+      const show = titleHit || rowsHit > 0;
+      g.sec.style.display = show ? '' : 'none';
+      g.link.classList.toggle('dim', !show);
+      if (show) any = true;
+    }
+    none.style.display = any ? 'none' : '';
+  };
+  search.addEventListener('input', () => filter(search.value));
+  search.addEventListener('keydown', (e) => { if (e.key === 'Escape' && search.value) { e.stopPropagation(); search.value = ''; filter(''); } });
+  none.style.display = 'none';
+
+  el.append(pageHead('Settings'), h('div', { class: 'set-layout' }, nav, h('div', { class: 'set-body' }, search, none, ...secs)));
+
+  // the category column follows the scroll: the group nearest the top is lit
+  const onScroll = () => {
+    const top = (scroller()?.scrollTop || 0) + 90;
+    let cur = groups[0];
+    for (const g of groups) if (g.sec.style.display !== 'none' && topOf(g.sec) <= top) cur = g;
+    mark(cur.id);
+  };
+  scroller()?.addEventListener('scroll', onScroll, { passive: true });
+  requestAnimationFrame(onScroll);
+  const want = new URLSearchParams(location.hash.split('?')[1] || '').get('s');
+  if (want) requestAnimationFrame(() => jump(want));
+  return { title: 'Settings', cleanup: () => scroller()?.removeEventListener('scroll', onScroll) };
 }
 
 function describeGlobal(f) {

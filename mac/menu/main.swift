@@ -71,7 +71,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.autosaveName = "NocturneMenu"
         popover.behavior = .transient
         popover.animates = true
-        popover.contentViewController = NSHostingController(rootView: PanelView(p: player, c: controls))
+        // FIXED SIZE: the hosting controller must not resize the popover while it is open (a growing NSWindow keeps
+        // its bottom edge, so the panel crept up under the menu bar: Grant's screenshot, Nov 22). Measured once below.
+        let hc = NSHostingController(rootView: PanelView(p: player, c: controls))
+        if #available(macOS 13.0, *) { hc.sizingOptions = [] }
+        popover.contentViewController = hc
 
         controls.openApp = { [weak self] in self?.openApp() }
         controls.quitApp = { [weak self] in self?.quitAll() }
@@ -122,6 +126,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func togglePopover() {
         if popover.isShown { popover.performClose(nil); return }
         guard item != nil, let b = item.button else { return }
+        // size it to its content BEFORE it opens; it never changes size while open
+        if let v = popover.contentViewController?.view {
+            v.layoutSubtreeIfNeeded()
+            let fit = v.fittingSize
+            if fit.width > 50 && fit.height > 50 {
+                popover.contentSize = NSSize(width: ceil(fit.width), height: ceil(fit.height))
+            }
+        }
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()

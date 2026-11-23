@@ -235,9 +235,11 @@ struct PanelView: View {
                 .help(p.track.map { "\($0.title) — \($0.artist)" } ?? "")
                 LikeButton(p: p, c: c)
             }
-            if p.track != nil {
-                Scrubber(p: p, c: c, interval: 0.5)
-            }
+            // ALWAYS present (dimmed with no song): a row that appeared once the song arrived made the open panel
+            // taller, and macOS grows a window from its bottom edge -> the panel slid up under the menu bar (Nov 22)
+            Scrubber(p: p, c: c, interval: 0.5)
+                .opacity(p.track == nil ? 0.35 : 1)
+                .allowsHitTesting(p.track != nil)
             TransportRow(p: p, c: c)
             Divider().padding(.top, 2)
             HStack {
