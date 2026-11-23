@@ -87,6 +87,11 @@ class AppContext:
         from . import media
         self.loop = asyncio.get_running_loop()
         await self.engine.start()
+        # settings sync through the YouTube account (tempo/cloudsync.py)
+        from .cloudsync import CloudSync
+        self.engine.app_ctx = self
+        self.engine.cloud = CloudSync(self.engine)
+        self.engine.loop.create_task(self.engine.cloud.loop_forever(lambda: time.time() - self.window_ping < 10))
         self.engine.media = media.create(self.engine)
         app = make_app(self)
         self._runner = web.AppRunner(app, access_log=None)

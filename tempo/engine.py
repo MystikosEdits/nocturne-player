@@ -982,6 +982,13 @@ class Engine:
     # ---------------- saved versions ("My versions")
     def _save_versions(self):
         config.write_json(config.VERSIONS_FILE, self.versions)
+        if self.settings.on_change:
+            self.settings.on_change(["versions"])
+
+    def _save_pl_versions(self):
+        config.write_json(config.PL_VERSIONS_FILE, self.pl_versions)
+        if self.settings.on_change:
+            self.settings.on_change(["pl_versions"])
 
     def version_track(self, v: dict) -> dict:
         t = dict(v["track"])
@@ -1008,18 +1015,18 @@ class Engine:
 
     def link_pl_version(self, pid: str, set_video_id: str, vid: str):
         self.pl_versions.setdefault(pid, {})[set_video_id] = vid
-        config.write_json(config.PL_VERSIONS_FILE, self.pl_versions)
+        self._save_pl_versions()
 
     def unlink_pl_entries(self, pid: str, set_video_ids: list[str]):
         m = self.pl_versions.get(pid) or {}
         if any(m.pop(sv, None) for sv in set_video_ids):
             if not m:
                 self.pl_versions.pop(pid, None)
-            config.write_json(config.PL_VERSIONS_FILE, self.pl_versions)
+            self._save_pl_versions()
 
     def forget_playlist(self, pid: str):
         if self.pl_versions.pop(pid, None) is not None:
-            config.write_json(config.PL_VERSIONS_FILE, self.pl_versions)
+            self._save_pl_versions()
 
     def pl_overlay(self, p: dict) -> dict:
         """A playlist with its My-version entries swapped in (a copy: the cached playlist is never changed)."""
@@ -1041,6 +1048,8 @@ class Engine:
     def delete_version(self, vid: str) -> dict | None:
         gone = next((v for v in self.versions if v["vid"] == vid), None)
         self.versions = [v for v in self.versions if v["vid"] != vid]
+        if gone and getattr(self, "cloud", None):
+            self.cloud.meta["vdel"][vid] = time.time()      # so the other machine's copy doesn't bring it back
         self._save_versions()
         self.emit("versions", {"count": len(self.versions)})
         return gone          # the UI keeps it for Undo
@@ -1058,6 +1067,7 @@ class Engine:
         for v in self.versions:
             if v["vid"] == vid and title.strip():
                 v["title"] = title.strip()
+                v["mtime"] = time.time()                      # newest rename wins across machines
         self._save_versions()
         self.emit("versions", {"count": len(self.versions)})
 

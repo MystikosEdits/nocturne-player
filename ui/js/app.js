@@ -202,7 +202,19 @@ function buildTop() {
 }
 
 const loadRecent = () => { try { return JSON.parse(localStorage.getItem('tempo.recent') || '[]'); } catch { return []; } };
-const saveRecent = (l) => { try { localStorage.setItem('tempo.recent', JSON.stringify(l)); } catch {} };
+// recent searches live in the engine's settings too, so they sync between computers (tempo/cloudsync.py)
+let recentTimer = 0;
+const saveRecent = (l) => {
+  try { localStorage.setItem('tempo.recent', JSON.stringify(l)); } catch {}
+  clearTimeout(recentTimer);
+  recentTimer = setTimeout(() => post('/api/settings', { recent: l }).catch(() => {}), 800);
+};
+const adoptRecent = () => get('/api/settings').then((d) => {
+  const r = d.settings?.recent;
+  if (Array.isArray(r) && r.length) { try { localStorage.setItem('tempo.recent', JSON.stringify(r)); } catch {} }
+  else if (!Array.isArray(r) || !r.length) { const mine = loadRecent(); if (mine.length) post('/api/settings', { recent: mine }).catch(() => {}); }
+}).catch(() => {});
+adoptRecent();
 
 // ------------------------------------------------------------------ keyboard
 function typing(e) {
@@ -279,6 +291,20 @@ listen({
   spotify: (s) => emit('spotify', s),
   show: () => { try { window.pywebview?.api?.bring_to_front?.(); } catch {} },
   signin: () => { if (!store.state?.auth?.yt) V.signInGoogle(); },
+  // the account sync brought settings from the other computer: show them here at once
+  synced: async ({ keys = [] }) => {
+    if (keys.includes('theme')) { const { syncFromEngine } = await import('./theme.js'); syncFromEngine(); }
+    if (keys.includes('sidebar')) { const { resetSideCfg } = await import('./sidelist.js'); resetSideCfg(); emit('sidecfg'); }
+    if (keys.includes('recent')) adoptRecent();
+    if (keys.includes('versions')) emit('versions-changed');
+    if (parse().name === 'settings') render();
+    toast('Settings synced from your other computer');
+  },
+  icon: ({ hue }) => {
+    const b = document.querySelector('.brand img');
+    if (b) { b.src = `/api/appicon.png?h=${hue}`; b.style.filter = ''; }
+    try { window.pywebview?.api?.set_app_icon?.(hue)?.catch?.(() => {}); } catch {}
+  },
   offline: () => document.body.classList.add('disconnected'),
   online: () => document.body.classList.remove('disconnected'),
 });

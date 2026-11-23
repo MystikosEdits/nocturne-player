@@ -588,6 +588,23 @@ def make_app(app_ctx) -> web.Application:
         p = (await blocking(appicon.paths, appicon.clamp(h) if h is not None else None))["png"]
         return web.FileResponse(p, headers={"Cache-Control": "max-age=31536000" if h is not None else "no-cache"})
 
+    async def sync_get(request):
+        c = getattr(eng, "cloud", None)
+        return ok(c.status() if c else {"enabled": False})
+
+    async def sync_set(request):
+        c = getattr(eng, "cloud", None)
+        if not c:
+            return ok({"enabled": False})
+        b = await body(request)
+        if "enabled" in b:
+            await c.set_enabled(bool(b["enabled"]))
+        if b.get("now"):
+            await c.sync()
+        return ok(c.status())
+
+    r.add_get("/api/sync", sync_get)
+    r.add_post("/api/sync", sync_set)
     r.add_get("/api/appicon", appicon_get)
     r.add_post("/api/appicon", appicon_set)
     r.add_get("/api/appicon.png", appicon_png)

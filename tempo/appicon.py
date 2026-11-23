@@ -97,11 +97,16 @@ def base_hue() -> int:
 
 
 def prune(keep: int):
-    """Drop renders of hues no longer in use (each is ~2.5 MB)."""
+    """Drop renders of hues no longer in use (each is ~2.5 MB) - but only ones older than 10 minutes: Explorer and the
+    taskbar can still be drawing a hue picked a moment ago (deleting it at once = a blank icon, Grant Nov 22)."""
+    import time
     keep = clamp(keep)
     for d in DIR.glob("h*"):
-        if d.is_dir() and d.name != f"h{keep}":
-            shutil.rmtree(d, ignore_errors=True)
+        try:
+            if d.is_dir() and d.name != f"h{keep}" and time.time() - d.stat().st_mtime > 600:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
 
 
 # ------------------------------------------------------------------ applying it (engine process)
@@ -127,6 +132,7 @@ def _shortcuts(ico: Path):
         from win32com.shell import shell, shellcon
         pythoncom.CoInitialize()
         run_py = str(config.ROOT / "run.py").lower()
+        changed = []
         for folder in (shellcon.CSIDL_PROGRAMS, shellcon.CSIDL_DESKTOPDIRECTORY):
             lnk = Path(shell.SHGetFolderPath(0, folder, None, 0)) / f"{config.NAME}.lnk"
             if not lnk.exists():
@@ -138,7 +144,10 @@ def _shortcuts(ico: Path):
                 continue
             link.SetIconLocation(str(ico), 0)
             pf.Save(str(lnk), 0)
-        shell.SHChangeNotify(shellcon.SHCNE_ASSOCCHANGED, shellcon.SHCNF_IDLIST, None, None)   # Explorer re-reads icons
+            changed.append(str(lnk))
+        # refresh just these shortcuts (ASSOCCHANGED made Explorer redraw EVERY icon: the taskbar flickered)
+        for path in changed:
+            shell.SHChangeNotify(shellcon.SHCNE_UPDATEITEM, shellcon.SHCNF_PATHW, path, None)
     except Exception as e:              # noqa: BLE001
         log.info("shortcut icons: %s", e)
 

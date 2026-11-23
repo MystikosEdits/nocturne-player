@@ -84,6 +84,7 @@ DEFAULTS = {
     # iPhone-style background sounds, played by a second little player
     "sidebar": {"pinned": [], "folders": []},   # playlist pins + folders (Nocturne only; YouTube has neither)
     "bg_sound": {"on": False, "mix": {"rain_roof": 100}, "volume": 40, "with_music": 25, "stop_with_music": False, "stop_with_sleep": True},
+    "recent": [],                 # recent searches (synced between machines)
     "icon_hue": 0,                # app icon hue shift in degrees (tempo/appicon.py); 0 = the original violet
     "theme": None,                # appearance (the UI owns its shape; stored here so it survives)
 }
@@ -118,9 +119,18 @@ class Settings:
     def get(self, key):
         return self.data.get(key, DEFAULTS.get(key))
 
+    on_change = None    # engine: cloudsync.CloudSync.touch(keys) - every saved key is stamped for the account sync
+
     def update(self, changes: dict):
+        keys = []
         for k, v in changes.items():
             if k in DEFAULTS:
                 self.data[k] = v
+                keys.append(k)
         write_json(SETTINGS_FILE, self.data)
+        if self.on_change and keys:
+            try:
+                self.on_change(keys)
+            except Exception:
+                pass
         return self.data

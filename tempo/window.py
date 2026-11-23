@@ -45,9 +45,8 @@ class JsApi:
             p = appicon.paths(int(hue))
             if config.IS_WIN:
                 from System import Action
-                from System.Drawing import Icon
                 form = win.native
-                form.BeginInvoke(Action(lambda: setattr(form, "Icon", Icon(str(p["ico"])))))
+                form.BeginInvoke(Action(lambda: _set_win_icon(form, p["ico"])))
             elif config.IS_MAC:
                 from PyObjCTools import AppHelper
                 import AppKit
@@ -258,6 +257,28 @@ def _style_mac(win):
         pass
 
 
+def _set_win_icon(form, ico):
+    """Window + taskbar icon at the EXACT sizes for this window's DPI (big = taskbar / Alt-Tab, small = title bar).
+    WinForms' form.Icon alone hands Windows one generic size (blurry / odd on the 125% panel). UI thread only."""
+    try:
+        import ctypes
+        from System.Drawing import Icon
+        form.Icon = Icon(str(ico))
+        u = ctypes.windll.user32
+        u.LoadImageW.restype = ctypes.c_void_p
+        u.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        u.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_void_p]
+        hwnd = ctypes.c_void_p(form.Handle.ToInt64())
+        dpi = u.GetDpiForWindow(hwnd) or 96
+        for which, metric, fallback in ((1, 11, 32), (0, 49, 16)):        # ICON_BIG / SM_CXICON, ICON_SMALL / SM_CXSMICON
+            size = u.GetSystemMetricsForDpi(metric, dpi) or fallback
+            h = u.LoadImageW(None, str(ico), 1, size, size, 0x10)          # IMAGE_ICON, LR_LOADFROMFILE
+            if h:
+                u.SendMessageW(hwnd, 0x0080, which, h)                     # WM_SETICON
+    except Exception:
+        pass
+
+
 def _overlap(a, b) -> float:
     """Area two NSRects share (0 when apart)."""
     w = min(a.origin.x + a.size.width, b.origin.x + b.size.width) - max(a.origin.x, b.origin.x)
@@ -395,6 +416,13 @@ def main():
             _style_windows(win)
             try:
                 keep_scale()
+            except Exception:
+                pass
+            try:
+                from . import appicon
+                from System import Action
+                ico = appicon.paths()["ico"]
+                win.native.BeginInvoke(Action(lambda: _set_win_icon(win.native, ico)))   # WinForms: UI thread only
             except Exception:
                 pass
             # taskbar hover buttons: previous / play-pause / next (like Spotify's)

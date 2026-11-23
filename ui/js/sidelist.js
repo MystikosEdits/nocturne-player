@@ -8,6 +8,7 @@ import { get, post } from './api.js';
 import { h, icon, emit, prompt, toast } from './ui.js';
 
 let cfg = null;
+export const resetSideCfg = () => { cfg = null; };   // the account sync brought new pins / folders
 let loaded = false;       // never write before the saved pins/folders were really read: a failed read used to start
                           // from an empty set, and the next pin then saved over (= wiped) every folder
 const fresh = () => ({ pinned: [], folders: [] });

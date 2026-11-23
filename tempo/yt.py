@@ -152,6 +152,8 @@ def card(d: dict) -> dict | None:
         d = {**d, "artist": d.get("artist") or d["artists"][0].get("name")}
     pid = d.get("playlistId") or d.get("audioPlaylistId")
     title = d.get("title") or d.get("artist") or d.get("name") or ""
+    if pid and title.startswith("Nocturne settings (don't delete)"):
+        return None          # the account-sync storage playlist (tempo/cloudsync.py)
     thumb = best_thumb(d.get("thumbnails") or d.get("thumbnail"), 400)
     rt = (d.get("resultType") or d.get("type") or "").lower()
     if d.get("videoId") and not bid and rt not in ("playlist", "album"):

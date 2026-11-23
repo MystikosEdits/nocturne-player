@@ -420,6 +420,21 @@ export async function settings(_, el) {
       h('button', { class: 'btn primary', onclick: signInGoogle }, 'Sign in with Google')));
     acct.append(h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-desc' }, 'Google sign-in blocked in the window? ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); pasteSignIn(); } }, 'Paste your sign-in from the browser instead')))));
   }
+  // settings sync through the YouTube account (tempo/cloudsync.py)
+  if (auth.yt) {
+    const desc = h('div', { class: 'set-desc' }, 'Checking…');
+    const ago = (t) => { const m = Math.round((Date.now() / 1000 - t) / 60); return !t ? 'not yet' : m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+    const paint = (st) => {
+      desc.textContent = !st.enabled ? 'Off. Your look, pins, effects and My versions stay on this computer only.'
+        : st.error ? `Couldn’t sync: ${st.error}`
+        : `Your look, icon, playlist pins and folders, equalizer, effects, sounds, My versions and recent searches follow you to any computer signed in to this account. Last synced ${ago(st.last)}. Kept in a private playlist “Nocturne settings” (hidden here).`;
+    };
+    const sw = toggle(true, async (v) => { try { paint(await post('/api/sync', { enabled: v })); } catch (e) { toast(e.message, 'error'); } });
+    const now = h('button', { class: 'btn', onclick: async () => { now.disabled = true; try { paint(await post('/api/sync', { now: true })); toast('Synced'); } catch (e) { toast(e.message, 'error'); } now.disabled = false; } }, 'Sync now');
+    get('/api/sync').then((st) => { sw.querySelector('input').checked = !!st.enabled; paint(st); }).catch(() => paint({ enabled: false }));
+    acct.append(h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-title' }, 'Sync settings between computers'), desc),
+      h('div', { class: 'row-inline tight' }, now, sw)));
+  }
   add('Account', 'account', 'Account', acct);
 
   // the look
