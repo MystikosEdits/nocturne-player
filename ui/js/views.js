@@ -472,17 +472,34 @@ export async function settings(_, el) {
   const scroller = () => document.getElementById('main-scroll');
   // a group's top inside the scroller, in CSS px (rects are screen px under Settings -> Size: divide by the zoom)
   const topOf = (sec) => { const sc = scroller(); return sc ? (sec.getBoundingClientRect().top - sc.getBoundingClientRect().top) / pageZoom() + sc.scrollTop : 0; };
+  // the pinned title + search box (Grant, Nov 22: "the settings text in setting should not scroll with the rest")
+  const head = h('div', { class: 'set-head' }, pageHead('Settings'), null);
+  const headH = () => head.offsetHeight || 110;
+  // where a group's heading lands: under the scroller's top padding (the floating top bar) + the pinned head
+  const below = () => (parseFloat(getComputedStyle(scroller() || document.body).paddingTop) || 60) + headH() + 14;
+  /* JUMPING (Grant: "when clicking categories in there it bugs out a little"): while the page glides to a group the
+     highlight used to flicker through every group it passed, and the last groups (which can't reach the top) lit the
+     one before. Now the clicked one stays lit until the glide ends or you scroll yourself. */
+  let jumping = null, jumpTimer = 0;
   const jump = (id) => {
     const g = groups.find((x) => x.id === id);
     if (!g) return;
     if (search.value) { search.value = ''; filter(''); }
-    scroller()?.scrollTo({ top: Math.max(0, topOf(g.sec) - 70), behavior: 'smooth' });
+    jumping = id;
     mark(id);
+    const sc = scroller();
+    if (!sc) return;
+    const target = Math.max(0, Math.min(topOf(g.sec) - below(), sc.scrollHeight - sc.clientHeight));
+    if (Math.abs(target - sc.scrollTop) < 2) { jumping = null; return; }
+    sc.scrollTo({ top: target, behavior: 'smooth' });
+    clearTimeout(jumpTimer);
+    jumpTimer = setTimeout(() => { jumping = null; }, 1200);    // safety: the glide never takes this long
   };
   const mark = (id) => groups.forEach((g) => g.link.classList.toggle('on', g.id === id));
 
   // search: rows whose text matches; whole groups whose title matches; nothing found -> a hint
   const search = h('input', { class: 'input set-search', type: 'search', placeholder: 'Search settings (theme, icon, equalizer, startup…)', spellcheck: false });
+  head.append(search);
   const none = h('div', { class: 'set-none' }, 'No settings match. Try another word.');
   const filter = (q) => {
     q = q.trim().toLowerCase();
@@ -501,25 +518,37 @@ export async function settings(_, el) {
       if (show) any = true;
     }
     none.style.display = any ? 'none' : '';
+    if (q) scroller()?.scrollTo({ top: 0 });
   };
   search.addEventListener('input', () => filter(search.value));
   search.addEventListener('keydown', (e) => { if (e.key === 'Escape' && search.value) { e.stopPropagation(); search.value = ''; filter(''); } });
   none.style.display = 'none';
 
-  el.append(pageHead('Settings'), h('div', { class: 'set-layout' }, nav, h('div', { class: 'set-body' }, search, none, ...secs)));
+  // the tail lets the LAST groups scroll up under the head too (otherwise "About" could never reach the top)
+  el.append(head, h('div', { class: 'set-layout' }, nav, h('div', { class: 'set-body' }, none, ...secs, h('div', { class: 'set-tail' }))));
+  const ro = new ResizeObserver(() => el.style.setProperty('--set-head-h', `${headH()}px`));
+  ro.observe(head);
 
-  // the category column follows the scroll: the group nearest the top is lit
+  // the category column follows the scroll: the group whose heading is nearest under the head is lit
   const onScroll = () => {
-    const top = (scroller()?.scrollTop || 0) + 90;
+    if (jumping) {                          // a click's glide: keep its group lit, notice when it has stopped
+      clearTimeout(jumpTimer);
+      jumpTimer = setTimeout(() => { jumping = null; }, 160);
+      return;
+    }
+    const sc = scroller();
+    const top = (sc?.scrollTop || 0) + below() + 24;
     let cur = groups[0];
     for (const g of groups) if (g.sec.style.display !== 'none' && topOf(g.sec) <= top) cur = g;
     mark(cur.id);
   };
+  const manual = () => { jumping = null; };           // the wheel / a drag takes over from a click's glide
   scroller()?.addEventListener('scroll', onScroll, { passive: true });
+  scroller()?.addEventListener('wheel', manual, { passive: true });
   requestAnimationFrame(onScroll);
   const want = new URLSearchParams(location.hash.split('?')[1] || '').get('s');
   if (want) requestAnimationFrame(() => jump(want));
-  return { title: 'Settings', cleanup: () => scroller()?.removeEventListener('scroll', onScroll) };
+  return { title: 'Settings', cleanup: () => { scroller()?.removeEventListener('scroll', onScroll); scroller()?.removeEventListener('wheel', manual); ro.disconnect(); clearTimeout(jumpTimer); } };
 }
 
 function describeGlobal(f) {

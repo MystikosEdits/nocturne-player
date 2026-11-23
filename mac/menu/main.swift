@@ -53,6 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let dir = arg("--snapshot") {          // offscreen render for checking the layout, then quit
             link.connect()
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [self] in
+                // the size the live popover will get (same controller setup as the menu-bar panel)
+                let hc = NSHostingController(rootView: PanelView(p: player, c: controls))
+                if #available(macOS 13.0, *) { hc.sizingOptions = [] }
+                hc.view.layoutSubtreeIfNeeded()
+                say("panel size \(panelSize(hc)) (old fittingSize way: \(hc.view.fittingSize))")
                 runSnapshot(dir: dir, player: player, controls: controls)
                 exit(0)
             }
@@ -123,16 +128,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The panel's real size, asked from SwiftUI. (With sizingOptions = [] the hosting VIEW's fittingSize no longer
+    /// reflects the SwiftUI content: it came out too short and the panel was cropped top and bottom, Nov 22.)
+    func panelSize(_ hc: NSHostingController<PanelView>) -> NSSize {
+        let fit = hc.sizeThatFits(in: NSSize(width: 300, height: 4000))
+        guard fit.width > 100, fit.height > 200, fit.height < 2000 else { return NSSize(width: 300, height: 486) }
+        return NSSize(width: ceil(fit.width), height: ceil(fit.height))
+    }
+
     func togglePopover() {
         if popover.isShown { popover.performClose(nil); return }
         guard item != nil, let b = item.button else { return }
         // size it to its content BEFORE it opens; it never changes size while open
-        if let v = popover.contentViewController?.view {
-            v.layoutSubtreeIfNeeded()
-            let fit = v.fittingSize
-            if fit.width > 50 && fit.height > 50 {
-                popover.contentSize = NSSize(width: ceil(fit.width), height: ceil(fit.height))
-            }
+        if let hc = popover.contentViewController as? NSHostingController<PanelView> {
+            popover.contentSize = panelSize(hc)
         }
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
