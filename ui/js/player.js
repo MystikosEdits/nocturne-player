@@ -168,6 +168,8 @@ export function wakeClock() {
 
 // ------------------------------------------------------------------ state -> bar
 let lastTrackKey = null;
+let thumbPlaying = null;   // last play/pause state sent to the taskbar hover buttons
+
 export function renderState() {
   const s = store.state;
   if (!s) return;
@@ -178,6 +180,9 @@ export function renderState() {
   els.play.append(icon(s.paused ? 'play' : 'pause'));
   els.play.classList.toggle('loading', !!s.loading);
   els.play.title = s.paused ? 'Play (Space)' : 'Pause (Space)';
+  // the Windows taskbar hover buttons show play or pause to match (only told when it changes)
+  const playingNow = !!s.track && !s.paused;
+  if (playingNow !== thumbPlaying) { thumbPlaying = playingNow; window.pywebview?.api?.thumbbar_state?.(playingNow)?.catch?.(() => {}); }
   els.shuffle.classList.toggle('on', !!s.shuffle);
   els.repeat.classList.toggle('on', s.repeat !== 'off');
   els.repeat.innerHTML = '';

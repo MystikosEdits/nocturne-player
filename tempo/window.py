@@ -33,6 +33,13 @@ class JsApi:
         self._signin = None
         self._pre_mini = None   # the window's frame / minimum size before the mini player (private, same reason)
         self._keeper = None     # winscale.DpiKeeper (Windows), private for the same reason
+        self._thumbbar = None   # thumbbar.ThumbBar (Windows taskbar hover buttons), private for the same reason
+
+    def thumbbar_state(self, playing):
+        """The page reports play / pause so the taskbar hover button shows the right icon."""
+        if self._thumbbar:
+            self._thumbbar.set_playing(bool(playing))
+        return True
 
     def mini(self, on, w=440, h=136, dpr=1):
         """Mini player: shrink the window to a small always-on-top player, or put it back exactly where it was.
@@ -205,9 +212,30 @@ def _style_mac(win):
             if icon.exists():
                 img = AppKit.NSImage.alloc().initWithContentsOfFile_(str(icon))
                 AppKit.NSApplication.sharedApplication().setApplicationIconImage_(img)
+            # wholly on screen (not under the menu bar / Dock, never partly off an edge): Grant, Nov 22, "open halfway
+            # off the screen". Fits it into the visible area of the screen holding most of it, shrinking if needed.
+            try:
+                f = w.frame()
+                scr = max(AppKit.NSScreen.screens(), key=lambda s: _overlap(s.visibleFrame(), f), default=None) \
+                    or AppKit.NSScreen.mainScreen()
+                v = scr.visibleFrame()
+                wd, ht = min(f.size.width, v.size.width), min(f.size.height, v.size.height)
+                x = min(max(f.origin.x, v.origin.x), v.origin.x + v.size.width - wd)
+                y = min(max(f.origin.y, v.origin.y), v.origin.y + v.size.height - ht)
+                if (x, y, wd, ht) != (f.origin.x, f.origin.y, f.size.width, f.size.height):
+                    w.setFrame_display_(((x, y), (wd, ht)), True)
+            except Exception:
+                pass
         AppHelper.callAfter(go)
     except Exception:
         pass
+
+
+def _overlap(a, b) -> float:
+    """Area two NSRects share (0 when apart)."""
+    w = min(a.origin.x + a.size.width, b.origin.x + b.size.width) - max(a.origin.x, b.origin.x)
+    h = min(a.origin.y + a.size.height, b.origin.y + b.size.height) - max(a.origin.y, b.origin.y)
+    return w * h if w > 0 and h > 0 else 0.0
 
 
 def _bring_to_front(win):
@@ -340,6 +368,24 @@ def main():
             _style_windows(win)
             try:
                 keep_scale()
+            except Exception:
+                pass
+            # taskbar hover buttons: previous / play-pause / next (like Spotify's)
+            try:
+                from .thumbbar import ThumbBar
+
+                def click(action):
+                    try:
+                        api("/api/cmd", {"action": action}, timeout=10)
+                    except Exception:
+                        pass
+                js._thumbbar = ThumbBar(win, click)
+                try:
+                    st = api("/api/state", timeout=3)
+                    js._thumbbar.playing = bool(st.get("track")) and not st.get("paused")
+                except Exception:
+                    pass
+                js._thumbbar.install()
             except Exception:
                 pass
         elif config.IS_MAC:

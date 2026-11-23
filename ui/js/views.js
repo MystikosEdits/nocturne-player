@@ -4,7 +4,7 @@ import { get, post, cached, dropCache, cmd } from './api.js';
 import {
   h, icon, btn, pill, img, go, store, on, shelf, grid, empty, skeleton, errorBox, toast, run, modal,
   prompt, playTracks, playKind, playItem, artColor, fmtTime, fmtBytes, artistLinks, myPlaylists, isMac,
-  copyLink, menu, addToPlaylistMenu, needSignIn,
+  copyLink, menu, addToPlaylistMenu, needSignIn, trackMenu, collectionMenu, prefetchOnHover, prefetchPageOnHover,
 } from './ui.js';
 import { trackList } from './tracklist.js';
 import { shortcutRows } from './shortcuts.js';
@@ -120,6 +120,12 @@ function topCard(item) {
       isTrack ? artistLinks(item.artists) : (item.sub || '').replace(/^(Album|Single|EP|Playlist|Artist)\s*•\s*/i, '')),
     h('button', { class: 'bigplay', title: 'Play', onclick: (e) => { e.stopPropagation(); playItem(item); } }, icon('play')));
   c.addEventListener('click', () => (isTrack ? playItem(item) : go(`#/${item.kind}/${item.id}`)));
+  // the top result had no right-click menu at all (Grant, Nov 22): same menus as every other song / card
+  c.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (isTrack) trackMenu(item, e.clientX, e.clientY); else collectionMenu(item, e.clientX, e.clientY);
+  });
+  if (isTrack) prefetchOnHover(c, () => [item.id]); else prefetchPageOnHover(c, item);
   return c;
 }
 

@@ -84,11 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // a monitor unplugged / resolution changed: pull the desktop player back onto a screen
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil,
                                                queue: .main) { [weak self] _ in
-            guard let self, let d = self.desk else { return }
-            let r = d.frame
-            if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(r.insetBy(dx: 40, dy: 40)) }) {
-                d.setFrameOrigin(self.savedDeskOrigin(r.size, ignoreSaved: true))
-            }
+            self?.snapDeskOnScreen()
         }
         say("menu helper up (port \(port), engine pid \(enginePid.map(String.init) ?? "-"), widget \(hasWidget))")
     }
@@ -261,19 +257,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func savedDeskOrigin(_ size: NSSize, ignoreSaved: Bool = false) -> NSPoint {
         if !ignoreSaved, let s = defaults.string(forKey: "deskOrigin") {
-            let p = NSPointFromString(s)
-            let r = NSRect(origin: p, size: size)
-            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(r.insetBy(dx: 40, dy: 40)) }) { return p }
+            return fullyOnScreen(NSRect(origin: NSPointFromString(s), size: size))
         }
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return .zero }   // no screen attached
         let v = screen.visibleFrame
-        return NSPoint(x: v.maxX - size.width - 24, y: v.maxY - size.height - 24)
+        return fullyOnScreen(NSRect(x: v.maxX - size.width - 24, y: v.maxY - size.height - 24, width: size.width, height: size.height))
+    }
+
+    /// The origin that puts `r` WHOLLY inside the visible area (not under the menu bar or the Dock) of the screen holding
+    /// most of it. Grant, Nov 22: "the widget on mac open halfway off the screen" (overlapping at all used to count).
+    func fullyOnScreen(_ r: NSRect) -> NSPoint {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { return r.origin }
+        func area(_ s: NSScreen) -> CGFloat { let i = s.visibleFrame.intersection(r); return i.isNull ? 0 : i.width * i.height }
+        let best = screens.max(by: { area($0) < area($1) }).flatMap { area($0) > 0 ? $0 : nil } ?? NSScreen.main ?? screens[0]
+        let v = best.visibleFrame.insetBy(dx: 8, dy: 8)
+        return NSPoint(x: min(max(r.minX, v.minX), max(v.minX, v.maxX - r.width)),
+                       y: min(max(r.minY, v.minY), max(v.minY, v.maxY - r.height)))
+    }
+
+    func snapDeskOnScreen() {
+        guard let d = desk else { return }
+        let p = fullyOnScreen(d.frame)
+        if p != d.frame.origin {
+            d.setFrame(NSRect(origin: p, size: d.frame.size), display: true, animate: true)
+            defaults.set(NSStringFromPoint(p), forKey: "deskOrigin")
+        }
     }
 
     func deskDrag(_ v: DragGesture.Value?) {
         guard let panel = desk else { return }
         guard v != nil else {
-            if dragStart != nil { defaults.set(NSStringFromPoint(panel.frame.origin), forKey: "deskOrigin") }
+            if dragStart != nil {
+                defaults.set(NSStringFromPoint(panel.frame.origin), forKey: "deskOrigin")
+                snapDeskOnScreen()          // dropped partly off the screen: slide it back in
+            }
             dragStart = nil
             return
         }
